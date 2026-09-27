@@ -54,6 +54,10 @@ and defines only what actually differs — grid, roster, spawn hexes,
 terrain occupancy, elevation, defended structures, the road, the wave
 table, enemy archetypes.
 
+**`docs/DESIGN_DECISIONS.md` is the directive log** — every design
+decision, its rationale and its status. README says what is
+implemented; that file says what was decided and why.
+
 **Do not hand-copy a rule table into this project.** Althar's Keep
 already contains one example of that mistake: `scripts/cfg_proof.gd` is
 a 210-line duplicate that has since gone stale (learned ceilings say
@@ -287,9 +291,8 @@ make physical and tactical sense.
 **Now wired, minimally.** The pause overlay's MARKET button opens a
 two-tab peddler panel over the shared `sim/market.gd`: BUY lists the
 scenario's `MARKET_STOCK` (every `kind = "equipment"` piece plus the
-trinkets, sorted by `value` — prices are the shared, PROVISIONAL
-`value` fields; consumables are not stocked because the canonical
-table gives them no `value` yet and they would be free), SELL lists
+consumables and trinkets, sorted by `value` — prices are the shared,
+PROVISIONAL `value` fields), SELL lists
 the shared pack at `floor(value * sell_ratio)`. Gold is the party's
 `inventory.gold`, shown at the top of the panel.
 

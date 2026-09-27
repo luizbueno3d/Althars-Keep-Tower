@@ -66,6 +66,11 @@ var progress              # sim/progress.gd — XP, Level, attributes,
 var focus_id := ""        # explicit player target order: heroes chase
                           # this enemy instead of the zone default;
                           # cleared when the target dies/disengages
+var objective_id := ""    # assault objective for ai="march": the id of a
+                          # STRUCTURE this actor advances on (the Keep).
+                          # Empty -> the actor uses its ordinary
+                          # hostility-based goal. Set by the scenario,
+                          # never by combat.
 var spells: Array = []    # support-spell ids this actor owns — the
                           # healer's kit; Support.cast refuses spells
                           # the caster does not know
@@ -115,6 +120,7 @@ static func create(d: Dictionary, rng = null) -> RefCounted:
 	a.participated = a.deployed
 	a.elevated = d.get("elevated", false)
 	a.spells = d.get("spells", []).duplicate()
+	a.objective_id = d.get("objective_id", "")
 	var Cfg = load("res://sim/config.gd")
 	for i in range(Cfg.BELT_SLOTS):
 		a.belt.append("")
@@ -205,6 +211,7 @@ func to_dict() -> Dictionary:
 		ai = ai, leash = leash, act_cd = act_cd, move_cd = move_cd,
 		cd = cd,
 		focus_id = focus_id, heal_cd = heal_cd, resur_cd = resur_cd,
+		objective_id = objective_id,
 		spells = spells.duplicate(), belt = belt.duplicate(),
 		progress = progress.to_dict() if progress != null else {},
 	}
@@ -249,6 +256,7 @@ func apply_dict(d: Dictionary) -> void:
 	move_cd = d.get("move_cd", move_cd)
 	cd = d.get("cd", cd)
 	focus_id = d.get("focus_id", focus_id)
+	objective_id = d.get("objective_id", objective_id)
 	heal_cd = d.get("heal_cd", heal_cd)
 	resur_cd = d.get("resur_cd", resur_cd)
 	if d.has("spells"):

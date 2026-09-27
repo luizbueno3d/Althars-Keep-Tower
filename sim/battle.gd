@@ -5,6 +5,7 @@ extends RefCounted
 const Actor = preload("res://sim/actor.gd")
 const Hex = preload("res://sim/hex.gd")
 const Items = preload("res://sim/items.gd")
+const Structure = preload("res://sim/structure.gd")
 
 var config                   # sim/config.gd class (constants via it)
 var rng                      # RandomNumberGenerator (or a scripted fake in tests)
@@ -34,6 +35,15 @@ var control_id := "wizard"     # Playable Party 0.5: the hero the
                                # future player→hero mapping could
                                # assign controllers without
                                # rewriting combat.
+## Defended structures (the Keep). A scenario may author them; a battle
+## with none behaves exactly as before. Integrity is separate from LP by
+## design — see sim/structure.gd.
+var structures := {}           # id -> Structure
+var structure_order: Array[String] = []
+var defense_lost := false      # a defended structure reached 0 Integrity
+var roster_builder := Callable()  # optional Callable(rng, group) that
+                               # GENERATES a roster per group. Unset =
+                               # author `config.ACTORS` (Althar's Keep).
 ## Measurement seam reserved for future candidate-rule studies
 ## (tests/foundations_exp.gd pattern). The 0.1 study's keys were
 ## resolved in Character Foundations 0.2: def_nat1_fail and
@@ -44,7 +54,12 @@ var control_id := "wizard"     # Playable Party 0.5: the hero the
 var experiment := {}
 
 ## Build a fresh deterministic battle from the config class.
-static func create(cfg) -> RefCounted:
+## `roster_builder` is an optional Callable(rng) -> Array[Dictionary] that
+## lets a scenario GENERATE its roster instead of authoring it flat —
+## enemy archetypes expanded into individuals with per-spawn rolls.
+## Opt-in: an authored scenario (Althar's Keep) passes nothing and its
+## `cfg.ACTORS` is used verbatim, exactly as before.
+static func create(cfg, roster_builder := Callable()) -> RefCounted:
 	var b = (load("res://sim/battle.gd") as GDScript).new()
 	b.config = cfg
 	b.rng = RandomNumberGenerator.new()
@@ -59,11 +74,24 @@ static func create(cfg) -> RefCounted:
 		# a fractional or deleted one.
 		if cfg.cell_blocked(h):
 			b.obstacles[h] = true
-	for d in cfg.ACTORS:
+	# A scenario either GENERATES its roster (a builder) or authors it
+	# flat in `ACTORS`. A generating scenario need not define ACTORS at
+	# all, so it is only read on the authored path.
+	var roster: Array = []
+	if roster_builder.is_valid():
+		b.roster_builder = roster_builder
+		roster = roster_builder.call(b.rng, b.group_index)
+	else:
+		roster = cfg.ACTORS
+	for d in roster:
 		var a = Actor.create(d, b.rng)   # seeded: bounded individual
 		                               # variation is deterministic
 		b.actors[a.id] = a
 		b.actor_order.append(a.id)
+	for d in cfg.STRUCTURES:
+		var s = Structure.create(d)
+		b.structures[s.id] = s
+		b.structure_order.append(s.id)
 	return b
 
 func emit(e: Dictionary) -> void:
@@ -165,6 +193,22 @@ func living_enemies() -> Array:
 			out.append(a)
 	return out
 
+## The living defended structure standing on `h`, or null. A structure
+## occupies its hex the way an actor does — attackers stop adjacent.
+func structure_at(h: Vector2i):
+	for id in structure_order:
+		var s = structures[id]
+		if s.alive and s.hex == h:
+			return s
+	return null
+
+func living_structures() -> Array:
+	var out := []
+	for id in structure_order:
+		if structures[id].alive:
+			out.append(structures[id])
+	return out
+
 ## NEXT GROUP — continuous-play encounter loop (NOT a reset):
 ## respawns every configured enemy as a fresh individual at its
 ## authored spawn hex. Friendly actors are completely untouched —
@@ -176,17 +220,31 @@ func living_enemies() -> Array:
 func next_group() -> bool:
 	if not encounter_done:
 		return false
-	for d in config.ACTORS:
-		if d.faction != "enemy":
-			continue
-		var a = Actor.create(d, rng)   # fresh archetype variation
-		actors[a.id] = a               # replaces the corpse/object
+	group_index += 1
+	if roster_builder.is_valid():
+		# A GENERATED roster: the next wave is a new set of individuals
+		# with new ids, so the previous wave's corpses leave the field.
+		for id in actor_order.duplicate():
+			if actors[id].faction == "enemy":
+				actors.erase(id)
+				actor_order.erase(id)
+		for d in roster_builder.call(rng, group_index):
+			if String(d.get("faction", "")) != "enemy":
+				continue
+			var a = Actor.create(d, rng)
+			actors[a.id] = a
+			actor_order.append(a.id)
+	else:
+		for d in config.ACTORS:
+			if d.faction != "enemy":
+				continue
+			var a = Actor.create(d, rng)   # fresh archetype variation
+			actors[a.id] = a               # replaces the corpse/object
 	for id in actor_order:
 		var a = actors[id]
 		if a.faction == "friendly":
 			a.participated = a.deployed
 	arrows = []                # the field resets — nothing mid-flight
-	group_index += 1
 	encounter_done = false
 	emit({type = "next_group", group = group_index})
 	return true
@@ -206,10 +264,15 @@ func to_dict() -> Dictionary:
 		group_index = group_index,
 		encounter_done = encounter_done,
 		control_id = control_id,
+		defense_lost = defense_lost,
 		inventory = {gold = inventory.gold,
 			items = inventory.items.duplicate()},
 		actors = saved,
 	}
+	var st := {}
+	for id in structure_order:
+		st[id] = structures[id].to_dict()
+	out.structures = st
 	# RNG state is optional — FakeRng in tests has none
 	if rng is RandomNumberGenerator:
 		out.rng = {seed = rng.seed, state = rng.state}
@@ -236,6 +299,11 @@ func apply_save(data: Dictionary) -> void:
 	for id in actor_order:
 		if saved_actors.has(id):
 			actors[id].apply_dict(saved_actors[id])
+	defense_lost = bool(data.get("defense_lost", defense_lost))
+	var saved_st: Dictionary = data.get("structures", {})
+	for id in structure_order:
+		if saved_st.has(id):
+			structures[id].apply_dict(saved_st[id])
 	var rs: Dictionary = data.get("rng", {})
 	if rng is RandomNumberGenerator and not rs.is_empty():
 		rng.seed = int(rs.get("seed", rng.seed))

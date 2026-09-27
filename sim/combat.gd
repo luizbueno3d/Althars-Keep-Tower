@@ -110,6 +110,13 @@ static func update(battle, dt: float) -> void:
 		if pool > 0:
 			Progress.award_encounter(battle, pool,
 				{group = battle.group_index})
+	# DEFENCE LOST: every defended structure has fallen. The sim only
+	# records the fact — what the scenario does about it (stop, offer a
+	# restart, let the run continue) is presentation's business.
+	if not battle.defense_lost and not battle.structure_order.is_empty() \
+			and battle.living_structures().is_empty():
+		battle.defense_lost = true
+		battle.emit({type = "defense_lost"})
 
 static func _act(battle, a) -> void:
 	var targets := _hostiles(battle, a)
@@ -126,6 +133,14 @@ static func _act(battle, a) -> void:
 	if reach != null:
 		_strike(battle, a, reach)
 		a.cd = a.act_cd * a.cadence_mult()
+		return
+	# ASSAULT (tower defence): march on the assigned structure and break
+	# it. Heroes are fought only when they physically block the way — the
+	# adjacent-strike branch above — so a marching enemy resumes its
+	# advance the moment the road is clear again. It never ghosts through
+	# a defender, and it never chases one off the route.
+	if a.ai == "march":
+		_assault(battle, a)
 		return
 	var goal = null
 	if a.ai == "advance":
@@ -171,6 +186,51 @@ static func _focus(battle, a):
 		a.focus_id = ""
 		return null
 	return fo
+
+## ASSAULT autonomy (tower defence): advance on the structure named by
+## `a.objective_id` and break it. There is no path-following system —
+## `_step` already flood-fills walkable cells to find the first step of a
+## shortest walkable route, so an AUTHORED ROAD (terrain occupancy) is
+## followed for free. Enemies reach the gate by walking the road because
+## the road is the only way through.
+static func _assault(battle, a) -> void:
+	var st = battle.structures.get(a.objective_id)
+	if st == null or not st.alive:
+		# objective already broken or unknown — hold position
+		a.cd = a.move_cd * 0.5 * a.cadence_mult()
+		return
+	if Hex.distance(a.hex, st.hex) <= a.attack_range:
+		_strike_structure(battle, a, st)
+		a.cd = a.act_cd * a.cadence_mult()
+		return
+	if _step(battle, a, st.hex):
+		a.cd = a.move_cd * a.cadence_mult()
+	else:
+		a.cd = a.move_cd * 0.5 * a.cadence_mult()
+
+## Strike a structure. The weapon's typed packet is folded through the
+## structure's own resist table and armor by the SAME sim/damage.gd the
+## creatures use — a structure is just another thing that can be handed a
+## packet, so fire/cold/impact against masonry is a data question rather
+## than a special case here.
+static func _strike_structure(battle, a, st) -> void:
+	a.ap = maxi(0, a.ap - Cfg.MELEE.ap_attack)
+	a.exert = Cfg.MELEE.rest_delay
+	var packet: Dictionary = Damage.roll_packet(battle,
+		_weapon_spec(battle, a), "physical")
+	var eff: int = maxi(0, Damage.packet_total(st, packet)
+		- Damage.armor_mitigation(st, packet))
+	var was: String = st.state()
+	var broke: bool = st.apply_damage(eff)
+	battle.emit({type = "structure_hit", actor = a.id,
+		structure = st.id, roll = Damage.merged_roll(packet),
+		effective = eff, integrity = st.integrity,
+		max_integrity = st.max_integrity})
+	if st.state() != was:
+		battle.emit({type = "structure_state", structure = st.id,
+			state = st.state(), integrity = st.integrity})
+	if broke:
+		battle.emit({type = "structure_lost", structure = st.id})
 
 ## Healer autonomy (Playable Party 0.5): deterministic triage —
 ## the most-wounded living ally worth a Heal. In range with MP and

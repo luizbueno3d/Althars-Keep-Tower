@@ -1,28 +1,27 @@
 extends RefCounted
-## Althar's Keep — Tower: the tower scenario.
+## Althar's Keep — Tower: SCENE 01, "The Defensive Front".
 ##
-## A SCENARIO module supplies only the things that describe a battlefield:
-## the grid, the roster and their spawn hexes, the terrain occupancy rule,
-## the elevation rule, and the loot/wave rewards. Everything that is a
-## RULE — melee DCs, regen rates, weapon dice, spell blocks, progression
-## tables, Table M, item definitions — is re-exported by reference from
-## the shared `sim/config.gd` below.
+## A SCENARIO module supplies only what describes a battlefield: the grid,
+## the roster and their spawn hexes, the terrain occupancy rule, the
+## elevation rule, the defended structures and the wave table. Everything
+## that is a RULE — melee DCs, weapon dice, spell blocks, progression,
+## Table M, items — is re-exported by reference from the shared
+## `sim/config.gd` below, so this scenario can never drift from Althar's
+## Keep's rules. (Contrast Althar's Keep's own `scripts/cfg_proof.gd`,
+## a hand-copied table that has already gone stale.)
 ##
-## Why re-export instead of copying (the `scripts/cfg_proof.gd` mistake):
-## a hand-copied rule table silently goes stale — cfg_proof.gd already
-## disagrees with the live config on Fireball dice, learned ceilings and
-## the support-spell roster. `const X := Shared.X` is a compile-time
-## reference to the SAME value, so this scenario can never drift from
-## Althar's Keep's rules. The two games share one rules engine, one
-## tuning surface, one bug fix.
+## SPATIAL COMPOSITION (inspired by, not copied from, the Kingdom Rush
+## reference): the Keep anchors the LEFT edge, enemies enter from the far
+## UPPER-RIGHT, and one broad winding road carries them through an open
+## fighting area, a chokepoint, and a final approach to the gate.
 ##
 ## Geometry note: `col(h) = 2*h.x + h.y` is proportional to world X
 ## (x = col * HEX_SIZE * sqrt(3)/2 * WORLD_SCALE), which is why the keep
-## uses the same expression for its wall band and keep column. The
-## corridor below is therefore a straight east-west band in world space.
+## uses the same expression for its wall band and keep column.
 
 const Shared = preload("res://sim/config.gd")
 const Hex = preload("res://sim/hex.gd")
+const Enemy = preload("res://sim/enemy.gd")
 
 ## ---- SHARED RULES (references, never copies) ----------------------
 const PROGRESSION := Shared.PROGRESSION
@@ -44,99 +43,158 @@ const AEGIS := Shared.AEGIS
 const HEALER_SPELLS := Shared.HEALER_SPELLS
 const ITEMS := Shared.ITEMS
 const BELT_SLOTS := Shared.BELT_SLOTS
-
-## Hex -> world mapping is shared so both games place actors identically.
+const ENCOUNTER_XP := Shared.ENCOUNTER_XP
+const LOOT := Shared.LOOT
 const HEX_SIZE := Shared.HEX_SIZE
 const HEX_SQUASH := Shared.HEX_SQUASH
 const WORLD_SCALE := Shared.WORLD_SCALE
 
-## ---- SCENARIO: corridor geometry -----------------------------------
-const SEED := 12345
+const SEED := 20260927
 
-const GRID_CENTER := Vector2i(5, 0)
-const GRID_RADIUS := 13
+## ---- SCENE: grid ---------------------------------------------------
+const GRID_CENTER := Vector2i(16, 0)
+const GRID_RADIUS := 24
 
-const TOWER_FACE_COL := -8     # col <= -8  -> the tower's mass
-const WALL_COL := -7           # col == -7  -> battlement walk (elevated)
-const CORRIDOR_HALF_R := 5     # |r| > 5    -> cliff walls
-const CORRIDOR_END_COL := 30   # col > 30   -> the far treeline
+## ---- SCENE: the Keep (left edge) -----------------------------------
+## Everything at or west of this column is the Keep's mass. The Keep TOP
+## is a small walkable, elevated platform carved out of it — Althar's
+## command post.
+const KEEP_FACE_COL := -5
+const KEEP_TOP_COLS := [-8, -7, -6]   # walkable battlement, r == 0
 
-## The tower as a place, not yet as a damageable object. Phase 4 turns
-## this into a simulated Structure (README §48); nothing reads it yet
-## beyond presentation framing.
-const TOWER := {
-	name = "The Gate Tower",
-	face_col = TOWER_FACE_COL,
-	walk_col = WALL_COL,
-	# Height of the battlement walk in metres — the top of the KayKit
-	# wall piece the curtain is built from. Presentation reads it to
-	# stand posted actors on the walk rather than inside the masonry;
-	# simulation ignores it (elevation is `wall_kind`, not a height).
-	walk_h = 4.0,
-	# INTACT -> DAMAGED -> HEAVILY DAMAGED -> BREACHED (README §48).
-	# Not simulated yet — declared so the presentation can already be
-	# built against the real shape.
-	states = ["INTACT", "DAMAGED", "HEAVILY_DAMAGED", "BREACHED"],
-}
-
-## ---- SCENARIO: cover in the corridor -------------------------------
-## KayKit Dungeon props (CC0) — the same low-poly language the frozen
-## 0.2 build used, not the cinematic `assets/nature` photogrammetry.
-## Kept clear of every spawn hex and the gate line: a prop that landed
-## on a spawn would make the roster unplaceable. `pos` is world metres.
-const FIELD_PROPS := [
-	{kind = "barrier", pos = Vector3(6.0, 0, 3.0), rot = 0.3,
-		line = 2.2, blocks = 0.8},
-	{kind = "rubble_large", pos = Vector3(9.5, 0, -3.5), rot = -0.5,
-		blocks = 1.0},
-	{kind = "trunk_large_A", pos = Vector3(12.0, 0, 2.5), rot = 0.4,
-		blocks = 1.0},
-	{kind = "box_large", pos = Vector3(19.0, 0, -2.0), rot = 0.2,
-		blocks = 0.9},
+## ---- SCENE: the road -----------------------------------------------
+## One authored route: broad, winding, and the ONLY way through — off-road
+## terrain is cliff and forest, so the road enforces the path without a
+## path-following system (`Combat._step` flood-fills walkable cells, so
+## marching enemies follow it for free).
+##
+## Segment widths vary: wide where the road should read as an open
+## fighting area, narrow at the chokepoints.
+const ROAD := [
+	{a = Vector2(50.0, 14.0), b = Vector2(38.0, 2.0),   w = 3.6},  # entry
+	{a = Vector2(38.0, 2.0),  b = Vector2(26.0, -8.0),  w = 4.2},  # OPEN AREA
+	{a = Vector2(26.0, -8.0), b = Vector2(14.0, 2.0),   w = 3.4},  # mid route
+	{a = Vector2(14.0, 2.0),  b = Vector2(4.0, -6.0),   w = 3.6},  # chokepoint
+	{a = Vector2(4.0, -6.0),  b = Vector2(-5.0, 0.0),   w = 3.8},  # final run
 ]
 
-## Whole-cell occupancy: a cell is occupied when it is inside the tower
-## mass, outside the corridor (cliff), or beyond the treeline. Occupied
-## cells stay in `valid` — they are real hexes with something in them
-## (the Hex Integrity rule).
+## ---- SCENE: the towers ---------------------------------------------
+## The Archer and the Healer each hold a dedicated elevated platform, at
+## the reference's two catapult positions: mid-route and upper-mid. A
+## tower has NO structural HP — its survival is the hero standing on it.
+const TOWERS := {
+	archer = Vector2i(13, -10),   # lower-mid, south of the mid route
+	healer = Vector2i(4, 7),      # upper-mid, north of the mid route
+}
+
+## ---- SCENE: the defended structure ---------------------------------
+## MVP: one Integrity pool (see sim/structure.gd). Material resistances
+## are deliberately EMPTY — no canonical masonry table exists yet, so the
+## gap is left visible rather than invented. PROVISIONAL integrity.
+const STRUCTURES := [
+	{
+		id = "keep", display_name = "Althar's Keep",
+		hex = Vector2i(-3, 1),
+		integrity = 200,
+		material = "stone",
+		armor = {lp = 1},
+		resist = {},
+	},
+]
+const KEEP_ID := "keep"
+
+## Keep workers (spec §16): a placeholder repair allowance, applied
+## between waves by the orchestrator. PROVISIONAL — no worker simulation,
+## no economy. 0 would mean "no repair at all".
+const KEEP_REPAIR_PER_WAVE := 25
+
+## Presentation heights (metres) of the two elevated levels. Scene data,
+## not rules: the simulation's elevation is `wall_kind` (a LEVEL, not a
+## height). Both the environment and the actor view read these so a hero
+## always stands ON the structure it occupies rather than inside it.
+const TOWER_H := 4.4
+const KEEP_TOP_H := 6.2
+
+## ---- occupancy ------------------------------------------------------
+
+static func _keep_top(h: Vector2i) -> bool:
+	return h.y == 0 and (2 * h.x + h.y) in KEEP_TOP_COLS
+
+static func _is_tower(h: Vector2i) -> bool:
+	return h == TOWERS.archer or h == TOWERS.healer
+
+## Whole-cell occupancy (Hex Integrity): a cell is occupied when it lies
+## inside the Keep's mass, or off the road. Occupied cells stay in
+## `valid` — they are real hexes with something in them.
 static func cell_blocked(h: Vector2i) -> bool:
-	var col: int = 2 * h.x + h.y
-	if col <= TOWER_FACE_COL:
-		return true
-	if col > CORRIDOR_END_COL:
-		return true
-	if absi(h.y) > CORRIDOR_HALF_R:
-		return true
+	if _is_tower(h) or _keep_top(h):
+		return false                    # the two towers and the Keep top
+	if 2 * h.x + h.y <= KEEP_FACE_COL:
+		return true                     # the Keep's mass
+	if _on_road(h):
+		return false
 	for p in FIELD_PROPS:
 		var pr: float = p.get("blocks", 0.0)
 		if pr <= 0.0:
-			continue
-		var c := Hex.to_world(h, HEX_SIZE, HEX_SQUASH) * WORLD_SCALE
-		var pp := Vector2(p.pos.x, p.pos.z)
-		var lin: float = p.get("line", 0.0)
-		if lin > 0.0:
-			var dir := Vector2(cos(p.get("rot", 0.0)),
-				-sin(p.get("rot", 0.0)))
-			var rel := c - pp
-			var t := clampf(rel.dot(dir), -lin * 0.5, lin * 0.5)
-			if (rel - dir * t).length() <= pr:
-				return true
-		elif c.distance_to(pp) <= pr:
+			continue                    # decorative dressing only
+		if _near_prop(h, p, pr):
+			return true
+	return true                         # cliff / forest
+
+static func _near_prop(h: Vector2i, p: Dictionary, pr: float) -> bool:
+	var c := Hex.to_world(h, HEX_SIZE, HEX_SQUASH) * WORLD_SCALE
+	var pp := Vector2(p.pos.x, p.pos.z)
+	var lin: float = p.get("line", 0.0)
+	if lin > 0.0:
+		var dir := Vector2(cos(p.get("rot", 0.0)), -sin(p.get("rot", 0.0)))
+		var rel := c - pp
+		var t := clampf(rel.dot(dir), -lin * 0.5, lin * 0.5)
+		return (rel - dir * t).length() <= pr
+	return c.distance_to(pp) <= pr
+
+## Distance from a cell's centre to the road centreline, in metres.
+static func road_distance(h: Vector2i) -> float:
+	var c := Hex.to_world(h, HEX_SIZE, HEX_SQUASH) * WORLD_SCALE
+	var best := 1.0e9
+	for seg in ROAD:
+		var a: Vector2 = seg.a
+		var b: Vector2 = seg.b
+		var ab := b - a
+		var len2 := ab.length_squared()
+		var t := 0.0 if len2 <= 0.0 else clampf((c - a).dot(ab) / len2,
+			0.0, 1.0)
+		best = minf(best, c.distance_to(a + ab * t))
+	return best
+
+static func _on_road(h: Vector2i) -> bool:
+	var c := Hex.to_world(h, HEX_SIZE, HEX_SQUASH) * WORLD_SCALE
+	for seg in ROAD:
+		var a: Vector2 = seg.a
+		var b: Vector2 = seg.b
+		var ab := b - a
+		var len2 := ab.length_squared()
+		var t := 0.0 if len2 <= 0.0 else clampf((c - a).dot(ab) / len2,
+			0.0, 1.0)
+		if c.distance_to(a + ab * t) <= float(seg.w):
 			return true
 	return false
 
-## Elevation: the battlement walk is level 1. Melee and movement never
-## cross levels, so a posted archer or the Wizard cannot be reached from
-## the ground and cannot strike down into it.
+## Elevation: the two tower platforms (1) and the Keep top (2). Melee and
+## movement never cross levels — a posted hero cannot be reached from the
+## ground and cannot strike down into it.
 static func wall_kind(h: Vector2i) -> int:
-	return 1 if (2 * h.x + h.y) == WALL_COL else 0
+	if _keep_top(h):
+		return 2
+	if _is_tower(h):
+		return 1
+	return 0
 
-## ---- SCENARIO: the roster ------------------------------------------
-## Five heroes hold the tower end; the first enemy group walks in from
-## the treeline. Pools/attributes/learned values are the SAME authored
-## Level-1 values Althar's Keep uses — the heroes are the same people.
-## Only `hex`, `anchor`, `deployed` and `elevated` are scenario data.
-const ACTORS := [
+## ---- SCENE: the five heroes ----------------------------------------
+## Same people, same authored Level-1 values as Althar's Keep. Only
+## `hex`, `deployed`, `elevated` and the defensive anchor are scenario
+## data. Althar commands from the Keep top; the Archer and Healer hold
+## their towers; the Warrior and Barbarian hold the road.
+const HEROES := [
 	{
 		id = "wizard", display_name = "Althar", faction = "friendly",
 		lp = 12, ap = 16, mp = 20, perception = 0, dodge = 0,
@@ -144,7 +202,7 @@ const ACTORS := [
 		attributes = {str = 45, dex = 65, agi = 55, con = 55,
 			int = 92, cha = 80, mag = 96},
 		learned = {spellcasting = 10},
-		hex = Vector2i(-4, 1),          # col -7 — on the battlement
+		hex = Vector2i(-3, 0),          # col -6 — the Keep top
 		elevated = true,
 	},
 	{
@@ -155,7 +213,7 @@ const ACTORS := [
 		attack = 5, defense = 6, shield = 7, weapon = "sword",
 		attack_range = 1, ai = "defend", leash = 4,
 		act_cd = 1.8, move_cd = 1.3,
-		hex = Vector2i(-2, 1),          # the gate approach
+		hex = Vector2i(2, -2),          # the last bend before the gate
 	},
 	{
 		id = "barbarian", display_name = "Barbarian", faction = "friendly",
@@ -163,15 +221,9 @@ const ACTORS := [
 		attributes = {str = 93, dex = 70, agi = 65, con = 82,
 			int = 45, cha = 55, mag = 5},
 		attack = 7, defense = 3, block = 0, weapon = "axe",
-		attack_range = 1, ai = "brawl", leash = 2,
+		attack_range = 1, ai = "brawl", leash = 5,
 		act_cd = 1.7, move_cd = 1.2,
-		# In reserve behind the gate. NOTE: in the shared sim `deployed`
-		# gates only healer triage and encounter XP — it does NOT stop a
-		# hero engaging. A reserve therefore still fights anything that
-		# reaches his leash, so his leash is deliberately short: he is
-		# the last line until Teleport commits him forward.
-		deployed = false,
-		hex = Vector2i(1, -1),
+		hex = Vector2i(12, -4),         # mid-route, forward of the Warrior
 	},
 	{
 		id = "archer", display_name = "Archer", faction = "friendly",
@@ -181,7 +233,7 @@ const ACTORS := [
 		learned = {attack = 10, defense = 8, resistance = 6},
 		weapon = "bow", attack_range = 8, ai = "shoot", leash = 8,
 		act_cd = 2.6, move_cd = 1.0,
-		hex = Vector2i(-5, 3),          # col -7 — the tower's firing post
+		hex = TOWERS.archer,            # mid-route firing tower
 		elevated = true,
 	},
 	{
@@ -194,52 +246,136 @@ const ACTORS := [
 		attack = 2, defense = 4, weapon = "1d4",
 		attack_range = 1, ai = "mend", leash = 5,
 		act_cd = 2.0, move_cd = 1.2,
-		hex = Vector2i(-1, 3),
-	},
-	{
-		id = "skeleton_a", display_name = "Skeleton A", faction = "enemy",
-		lp = 8, ap = 8, perception = 3, dodge = 2,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(13, 0),
-	},
-	{
-		id = "skeleton_b", display_name = "Skeleton B", faction = "enemy",
-		lp = 8, ap = 8, perception = 6, dodge = 4,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(13, -1),
-	},
-	{
-		id = "skeleton_c", display_name = "Skeleton C", faction = "enemy",
-		lp = 8, ap = 8, perception = 9, dodge = 6,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(14, 0),
-	},
-	{
-		id = "skeleton_d", display_name = "Skeleton D", faction = "enemy",
-		lp = 8, ap = 8, perception = 4, dodge = 3,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(14, -2),
-	},
-	{
-		id = "skeleton_e", display_name = "Skeleton E", faction = "enemy",
-		lp = 8, ap = 8, perception = 7, dodge = 5,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(13, 2),
-	},
-	{
-		id = "skeleton_f", display_name = "Skeleton F", faction = "enemy",
-		lp = 8, ap = 8, perception = 5, dodge = 4,
-		attack = 10, attack_var = "1d5-1", defense = 2, weapon = "claws",
-		attack_range = 1, ai = "advance", act_cd = 2.4, move_cd = 1.5,
-		hex = Vector2i(12, 3),
+		hex = TOWERS.healer,            # upper-mid support tower
+		elevated = true,
 	},
 ]
 
-## ---- SCENARIO: rewards ---------------------------------------------
-const ENCOUNTER_XP := Shared.ENCOUNTER_XP
-const LOOT := Shared.LOOT
+## ---- SCENE: enemy spawn --------------------------------------------
+## The far end of the road, upper-right. Individuals are dealt these in
+## order; they are all on the road.
+const SPAWN_HEXES := [
+	Vector2i(15, 10), Vector2i(15, 9), Vector2i(16, 10),
+	Vector2i(14, 10), Vector2i(14, 9), Vector2i(16, 9),
+	Vector2i(15, 11), Vector2i(14, 11),
+]
+
+## ---- ENEMY ARCHETYPES ----------------------------------------------
+## BASE stats. Every individual gets a bounded ±20% roll on its INNATE
+## stats (pools, attributes, Perception) at spawn, fixed for life —
+## see sim/enemy.gd. Equipment is discrete and never scaled.
+##
+## Distinct tiers are their OWN archetypes, never a high-rolled Skeleton.
+##
+## Susceptibility (spec §7): exposed bone takes ~20% LESS from pierce —
+## an arrow passes between ribs rather than through tissue. This is a
+## creature property, not extra armor, and it applies to ANY pierce
+## source, not just the Archer.
+const VARIATION := 0.20
+const SKELETON_RESIST := {pierce = 0.80}
+
+const ENEMY_ARCHETYPES := {
+	"skeleton": {
+		display_name = "Skeleton", faction = "enemy",
+		lp = 10, ap = 8, perception = 3, dodge = 2,
+		attack = 10, defense = 2, weapon = "claws",
+		attack_range = 1, ai = "march",
+		act_cd = 2.4, move_cd = 1.5,
+		resist = SKELETON_RESIST,
+		variation = VARIATION,
+	},
+	"skeleton_archer": {
+		display_name = "Skeleton Archer", faction = "enemy",
+		lp = 9, ap = 8, perception = 6, dodge = 3,
+		attack = 8, defense = 2, weapon = "bow",
+		attack_range = 8, ai = "shoot", leash = 9,
+		act_cd = 2.8, move_cd = 1.4,
+		resist = SKELETON_RESIST,
+		variation = VARIATION,
+	},
+	"skeleton_warrior": {
+		display_name = "Skeleton Warrior", faction = "enemy",
+		lp = 14, ap = 10, perception = 3, dodge = 1,
+		attack = 11, defense = 4, weapon = "sword",
+		attack_range = 1, ai = "march",
+		act_cd = 2.6, move_cd = 1.6,
+		armor = {lp = 2},
+		# plate conducts; armor eats impact; bone still shrugs at cold
+		resist = {pierce = 0.80, electrical = 1.5, impact = 0.75},
+		variation = VARIATION,
+	},
+	"ogre": {
+		display_name = "Ogre", faction = "enemy",
+		lp = 26, ap = 14, perception = 2, dodge = 0,
+		attack = 14, defense = 3, weapon = "club",
+		attack_range = 1, ai = "march",
+		act_cd = 3.2, move_cd = 2.0,
+		armor = {lp = 3},
+		# living mass: burns; shrugs off impact. Ranged weapons are
+		# effective against it through its POOR DODGE and its size, not
+		# through an invented damage bonus.
+		resist = {fire = 1.25, impact = 0.5},
+		variation = VARIATION,
+	},
+	"goblin": {
+		display_name = "Goblin", faction = "enemy",
+		lp = 6, ap = 10, perception = 8, dodge = 7,
+		attack = 7, defense = 1, weapon = "knife",
+		attack_range = 1, ai = "march",
+		act_cd = 1.6, move_cd = 0.9,
+		resist = {},
+		variation = VARIATION,
+	},
+}
+
+## ---- WAVES ----------------------------------------------------------
+## Composition per group. PROVISIONAL — the point is that each wave asks a
+## different tactical question rather than raising a number.
+const WAVES := [
+	{skeleton = 4},
+	{skeleton = 4, skeleton_archer = 1},
+	{skeleton = 3, skeleton_warrior = 2},
+	{skeleton = 4, skeleton_archer = 2, ogre = 1},
+	{skeleton = 4, skeleton_warrior = 2, skeleton_archer = 1, ogre = 1},
+	{goblin = 6, skeleton = 2},
+]
+
+## Group N -> composition. Past the authored table the last wave repeats
+## with one more Skeleton per group — the encounter never dead-ends, and
+## the escalation stays visible rather than hidden in a multiplier.
+static func wave_for(group: int) -> Dictionary:
+	var i: int = clampi(group - 1, 0, WAVES.size() - 1)
+	var comp: Dictionary = WAVES[i].duplicate()
+	if group > WAVES.size():
+		comp["skeleton"] = int(comp.get("skeleton", 0)) \
+			+ (group - WAVES.size())
+	return comp
+
+## Build the full roster for one group: the five heroes (identical every
+## group — they are the same people) plus this wave's individuals.
+static func build_roster(rng, group := 1) -> Array:
+	var out: Array = HEROES.duplicate(true)
+	for id in out:
+		id.objective_id = ""
+	out.append_array(
+		Enemy.build_wave(ENEMY_ARCHETYPES, wave_for(group), rng,
+			SPAWN_HEXES, group))
+	for e in out:
+		if String(e.get("faction", "")) == "enemy":
+			e.objective_id = KEEP_ID
+	return out
+
+## ---- dressing --------------------------------------------------------
+## Purely decorative: every entry has no `blocks`, so it changes no
+## occupancy. Off-road cells are cliff and forest anyway; these are the
+## rocks and timber that make that read.
+const FIELD_PROPS := [
+	{kind = "rubble_large", pos = Vector3(44.0, 0, 18.0), rot = 0.4},
+	{kind = "rubble_half", pos = Vector3(33.0, 0, -16.0), rot = 1.1},
+	{kind = "trunk_large_A", pos = Vector3(24.0, 0, 16.0), rot = 0.2},
+	{kind = "trunk_large_A", pos = Vector3(9.0, 0, 17.0), rot = 1.4},
+	{kind = "box_stacked", pos = Vector3(-1.0, 0, -14.0), rot = 0.7},
+	{kind = "barrel_large", pos = Vector3(-3.0, 0, 14.0), rot = 0.3},
+	{kind = "keg", pos = Vector3(20.0, 0, -16.0), rot = 1.0},
+	{kind = "crates_stacked", pos = Vector3(30.0, 0, 14.0), rot = 0.5},
+]

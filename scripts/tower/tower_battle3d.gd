@@ -1,15 +1,14 @@
 extends Node3D
-## Althar's Keep — Tower: runtime root.
+## Althar's Keep — Tower: runtime root for SCENE 01.
 ##
-## PHASE 0 SCAFFOLD. Owns the simulation built from `scenario_tower.gd`,
-## ticks it, drains its events into views, and routes input. The rules
-## live in the SHARED `sim/` (symlinked from Althar's Keep) — this file
-## contains no rules of its own and never writes to the simulation
-## except through its public API.
+## Owns the simulation built from `scenario_tower.gd`, ticks it, drains
+## its events into views and the HUD, and routes input. The rules live in
+## the SHARED `sim/` (vendored from Althar's Keep) — this file contains no
+## rules of its own and touches the simulation only through its public
+## API.
 ##
-## Deliberately thin: Phase 1 builds the real low-poly battlefield and
-## the shared UI kit. What exists here is the smallest thing that proves
-## a second game runs on the shared engine, on screen.
+## SCENE 01 loop: prepare -> start group -> enemies walk the road ->
+## combat -> loot -> wave cleared -> recover/repair -> next group.
 
 const Scenario = preload("res://scenario_tower.gd")
 const Battle = preload("res://sim/battle.gd")
@@ -17,15 +16,14 @@ const Combat = preload("res://sim/combat.gd")
 const Fireball = preload("res://sim/fireball.gd")
 const Blizzard = preload("res://sim/blizzard.gd")
 const Hex = preload("res://sim/hex.gd")
-const Dice = preload("res://sim/dice.gd")
+const Progress = preload("res://sim/progress.gd")
 
 const EnvScene = preload("res://scripts/tower/tower_env3d.gd")
 const ActorView = preload("res://scripts/tower/tower_actor_view.gd")
 
 const HOP_TIME := 0.28
+const KEEP_ID := "keep"
 
-## Slot -> spell id. Only the damaging spells are wired in Phase 0;
-## Teleport needs a source/destination UI and belongs to Phase 2.
 const SPELL_SLOTS := {
 	KEY_1: "fireball",
 	KEY_2: "lightning",
@@ -37,22 +35,28 @@ var views := {}
 var env: Node3D
 var cam: Camera3D
 
-var armed := ""            # spell id currently targeting, or ""
+var armed := ""
 var paused := false
 var hops: Array = []
-
 var _proj: MeshInstance3D
 var _proj_light: OmniLight3D
 var _elapsed := 0.0
 var _shot_at: Array = []
 var _log: Array = []
 var _flash := 0.0
+var _banner := ""
+var _banner_t := 0.0
+var _auto_wave := false
 
 var _hud: CanvasLayer
 var _l_title: Label
-var _l_status: Label
+var _l_wave: Label
 var _l_hint: Label
 var _l_log: Label
+var _l_banner: Label
+var _l_party: Label
+var _bar: ProgressBar
+var _l_keep: Label
 
 
 func _ready() -> void:
@@ -62,7 +66,7 @@ func _ready() -> void:
 	add_child(env)
 	cam = get_viewport().get_camera_3d()
 
-	sim = Battle.create(Scenario)
+	sim = Battle.create(Scenario, Callable(Scenario, "build_roster"))
 
 	for id in sim.actor_order:
 		var v = ActorView.new()
@@ -83,32 +87,37 @@ func _ready() -> void:
 			_shot_at.append({t = spec.to_float(), file = file})
 		elif a == "--dump":
 			_dump_placements()
+		elif a == "--autowave":
+			_auto_wave = true
 
-	_say("READY — %s: %d defenders, %d attackers" % [
-		Scenario.TOWER.name, _count("friendly"), _count("enemy")])
-	_say("1 fireball · 2 lightning · 3 blizzard · space pause")
-
-
-func _count(faction: String) -> int:
-	var n := 0
-	for id in sim.actor_order:
-		if sim.actors[id].faction == faction:
-			n += 1
-	return n
+	_say("SCENE 01 — The Defensive Front")
+	_say("WAVE %d — %s" % [sim.group_index, _wave_text()])
+	_say("1 fireball · 2 lightning · 3 blizzard · space pause · N next wave")
+	_refresh_hud()
 
 
-## --dump: print where every actor is, in both spaces, and whether the
-## view lifted it onto the walk. Placement bugs are otherwise invisible
+func _wave_text() -> String:
+	var parts: Array = []
+	for k in Scenario.wave_for(sim.group_index):
+		parts.append("%d %s" % [Scenario.wave_for(sim.group_index)[k], k])
+	return ", ".join(parts)
+
+
+## --dump: where every actor is, in both spaces, and whether the view
+## lifted it onto its structure. Placement bugs are otherwise invisible
 ## behind masonry.
 func _dump_placements() -> void:
-	print("DUMP  id           faction   hex        col   sim_y  view_pos")
+	print("DUMP  id                    faction   hex        col   y     view")
 	for id in sim.actor_order:
 		var a = sim.actors[id]
 		var v = views[id]
-		print("DUMP  %-12s %-9s %-10s %4d  %5.1f  (%.1f, %.1f, %.1f)" % [
-			id, a.faction, a.hex, 2 * a.hex.x + a.hex.y,
-			Scenario.TOWER.walk_h if a.elevated else 0.0,
+		print("DUMP  %-21s %-9s %-10s %4d  %4.1f  (%.1f, %.1f, %.1f)" % [
+			id, a.faction, a.hex, 2 * a.hex.x + a.hex.y, v.position.y,
 			v.position.x, v.position.y, v.position.z])
+	var k = sim.structures.get(KEEP_ID)
+	if k != null:
+		print("DUMP  KEEP %s integrity %d/%d  %s" % [k.hex,
+			k.integrity, k.max_integrity, k.state()])
 
 
 ## ---- presentation builders -----------------------------------------
@@ -116,8 +125,8 @@ func _dump_placements() -> void:
 func _build_projectile() -> void:
 	_proj = MeshInstance3D.new()
 	var s := SphereMesh.new()
-	s.radius = 0.30
-	s.height = 0.60
+	s.radius = 0.32
+	s.height = 0.64
 	_proj.mesh = s
 	var m := StandardMaterial3D.new()
 	m.albedo_color = Scenario.FIREBALL.color
@@ -130,8 +139,8 @@ func _build_projectile() -> void:
 
 	_proj_light = OmniLight3D.new()
 	_proj_light.light_color = Scenario.FIREBALL.color
-	_proj_light.light_energy = 4.0
-	_proj_light.omni_range = 12.0
+	_proj_light.light_energy = 4.5
+	_proj_light.omni_range = 13.0
 	_proj_light.visible = false
 	add_child(_proj_light)
 
@@ -141,12 +150,24 @@ func _build_hud() -> void:
 	_hud.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_hud)
 
-	_l_title = _mk_label(Vector2(20, 16), 22)
+	_l_title = _mk_label(Vector2(22, 14), 22)
 	_l_title.text = "ALTHAR'S KEEP — TOWER"
-	_l_status = _mk_label(Vector2(20, 46), 17)
-	_l_hint = _mk_label(Vector2(20, 700), 17)
-	_l_log = _mk_label(Vector2(20, 540), 15)
-	_l_log.modulate = Color(0.85, 0.87, 0.8, 0.9)
+	_l_wave = _mk_label(Vector2(22, 44), 17)
+
+	_l_keep = _mk_label(Vector2(22, 76), 15)
+	_bar = ProgressBar.new()
+	_bar.position = Vector2(22, 98)
+	_bar.size = Vector2(240, 14)
+	_bar.show_percentage = false
+	_bar.max_value = 100.0
+	_hud.add_child(_bar)
+
+	_l_party = _mk_label(Vector2(22, 130), 14)
+	_l_log = _mk_label(Vector2(22, 640), 14)
+	_l_log.modulate = Color(0.86, 0.88, 0.82, 0.92)
+	_l_hint = _mk_label(Vector2(22, 748), 16)
+	_l_banner = _mk_label(Vector2(430, 90), 34)
+	_l_banner.modulate = Color(1.0, 0.86, 0.45)
 
 
 func _mk_label(pos: Vector2, size: int) -> Label:
@@ -154,7 +175,7 @@ func _mk_label(pos: Vector2, size: int) -> Label:
 	l.position = pos
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", Color(0.93, 0.91, 0.86))
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	l.add_theme_constant_override("outline_size", 5)
 	_hud.add_child(l)
 	return l
@@ -164,12 +185,16 @@ func _mk_label(pos: Vector2, size: int) -> Label:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_SPACE:
-			_toggle_pause()
-			return
-		if event.keycode == KEY_ESCAPE:
-			_arm("")
-			return
+		match event.keycode:
+			KEY_SPACE:
+				_toggle_pause()
+				return
+			KEY_ESCAPE:
+				_arm("")
+				return
+			KEY_N:
+				_next_wave()
+				return
 		if SPELL_SLOTS.has(event.keycode):
 			_arm(SPELL_SLOTS[event.keycode])
 			return
@@ -195,13 +220,11 @@ func _arm(spell: String) -> void:
 	if spell == "":
 		_l_hint.text = ""
 		return
-	var cost: int = Scenario.SPELLS[spell].mp_cost
 	var w = sim.actors["wizard"]
 	_l_hint.text = "%s armed — click an enemy   (MP %d/%d)" % [
 		Scenario.SPELLS[spell].display_name, w.mp, w.max_mp]
 
 
-## Screen point -> the living enemy standing on that hex.
 func _enemy_at(screen: Vector2) -> Variant:
 	var ro := cam.project_ray_origin(screen)
 	var rd := cam.project_ray_normal(screen)
@@ -233,6 +256,33 @@ func _try_cast(screen: Vector2) -> void:
 		_l_hint.text = "cast rejected — %s" % res[1]
 
 
+func _next_wave() -> void:
+	if not sim.encounter_done:
+		return
+	sim.next_group()
+	# Keep workers (spec §16): a placeholder repair allowance between
+	# waves. PROVISIONAL — no workers, no economy, and NOT a refill of
+	# hero LP/AP/MP (the canonical rules do not refill those).
+	var k = sim.structures.get(KEEP_ID)
+	if k != null and Scenario.KEEP_REPAIR_PER_WAVE > 0:
+		var n: int = k.repair(Scenario.KEEP_REPAIR_PER_WAVE)
+		if n > 0:
+			_say("workers shore up the Keep (+%d integrity)" % n)
+	for id in sim.actor_order:
+		var v = views.get(id)
+		if v == null:
+			v = ActorView.new()
+			add_child(v)
+			v.bind(sim.actors[id], sim.actors[id].faction == "friendly")
+			views[id] = v
+		else:
+			v.bind(sim.actors[id], sim.actors[id].faction == "friendly")
+	_banner = "WAVE %d" % sim.group_index
+	_banner_t = 2.5
+	_say("WAVE %d — %s" % [sim.group_index, _wave_text()])
+	_refresh_hud()
+
+
 ## ---- tick -----------------------------------------------------------
 
 func _process(dt: float) -> void:
@@ -243,6 +293,7 @@ func _process(dt: float) -> void:
 			_shot_at.remove_at(i)
 
 	_flash = maxf(0.0, _flash - dt)
+	_banner_t = maxf(0.0, _banner_t - dt)
 	for i in range(hops.size() - 1, -1, -1):
 		var hop = hops[i]
 		hop.t += dt / HOP_TIME
@@ -252,7 +303,7 @@ func _process(dt: float) -> void:
 		else:
 			hop.node.position = hop.from.lerp(hop.to, hop.t)
 
-	if paused:
+	if paused or sim.defense_lost:
 		return
 
 	Fireball.update(sim, dt)
@@ -263,7 +314,10 @@ func _process(dt: float) -> void:
 	for id in sim.actor_order:
 		views[id].refresh()
 	_handle_events()
-	_refresh_status()
+	_refresh_hud()
+
+	if _auto_wave and sim.encounter_done and _banner_t <= 0.0:
+		_next_wave()
 
 
 func _sync_projectile() -> void:
@@ -277,24 +331,39 @@ func _sync_projectile() -> void:
 	var frac: float = 1.0 - fb.pos.distance_to(fb.to) \
 		/ maxf(fb.distance, 0.001)
 	var pos := Vector3(fb.pos.x * Scenario.WORLD_SCALE,
-		lerpf(9.0, 1.0, frac) + sin(frac * PI) * 1.2,
+		lerpf(Scenario.KEEP_TOP_H, 1.2, frac) + sin(frac * PI) * 1.4,
 		fb.pos.y * Scenario.WORLD_SCALE)
 	_proj.position = pos
 	_proj_light.position = pos
 
 
-func _refresh_status() -> void:
-	if _flash > 0.0:
-		return
-	var living := 0
-	for id in sim.actor_order:
-		var a = sim.actors[id]
-		if a.alive and a.faction == "friendly":
-			living += 1
+func _refresh_hud() -> void:
+	var k = sim.structures.get(KEEP_ID)
+	if k != null:
+		_l_keep.text = "KEEP INTEGRITY   %d / %d   %s" % [
+			k.integrity, k.max_integrity, k.state()]
+		_bar.value = k.fraction() * 100.0
 	var w = sim.actors["wizard"]
-	_l_status.text = "wave %d   defenders %d   MP %d/%d   %s" % [
-		sim.group_index, living, w.mp, w.max_mp,
-		"PAUSED" if paused else ""]
+	_l_wave.text = "wave %d   enemies %d   MP %d/%d%s" % [
+		sim.group_index, sim.living_enemies().size(), w.mp, w.max_mp,
+		"   PAUSED" if paused else ""]
+	var lines: Array = []
+	for id in ["wizard", "warrior", "barbarian", "archer", "healer"]:
+		var a = sim.actors.get(id)
+		if a == null:
+			continue
+		var state := "OK"
+		if not a.alive:
+			state = "FALLEN"
+		elif a.lp <= int(ceil(a.max_lp * 0.25)):
+			state = "CRITICAL"
+		elif a.ap <= 0:
+			state = "EXHAUSTED"
+		var mp := "  MP %d/%d" % [a.mp, a.max_mp] if a.has_mp() else ""
+		lines.append("%-10s LP %2d/%-2d  AP %2d/%-2d%s   %s" % [
+			a.display_name, a.lp, a.max_lp, a.ap, a.max_ap, mp, state])
+	_l_party.text = "\n".join(lines)
+	_l_banner.text = _banner if _banner_t > 0.0 else ""
 
 
 ## ---- events ---------------------------------------------------------
@@ -310,18 +379,37 @@ func _handle_events() -> void:
 				_say("CAST %s" % e.spell.display_name)
 			"explosion":
 				_flash = 0.25
-				_say("IMPACT at %s" % e.target)
 			"damage":
-				_say("%s takes %d" % [e.actor.display_name,
-					e.get("lp_before", 0) - e.get("lp_after", 0)])
+				pass
 			"death":
 				_say("%s falls" % e.actor.display_name)
+			"arrow_release":
+				pass
 			"level_up":
+				_banner = "%s REACHED LEVEL %d" % [e.actor.display_name,
+					e.actor.progress.level]
+				_banner_t = 2.5
 				_say("LEVEL UP — %s" % e.actor.display_name)
 			"encounter_end":
-				_say("WAVE %d CLEARED" % e.group)
+				_banner = "WAVE %d CLEARED" % e.group
+				_banner_t = 3.0
+				_say("WAVE %d CLEARED — press N for the next group" % e.group)
+			"structure_hit":
+				_flash = 0.18
+			"structure_state":
+				_say("THE KEEP IS %s (%d integrity)" % [e.state,
+					e.integrity])
+			"structure_lost":
+				_banner = "THE KEEP HAS FALLEN"
+				_banner_t = 99.0
+				_say("THE KEEP HAS FALLEN — defence lost")
+			"defense_lost":
+				_banner = "DEFENCE LOST"
+				_banner_t = 99.0
 			"loot":
 				_say("%s drops loot" % e.actor.display_name)
+			"next_group":
+				pass
 			_:
 				pass
 
@@ -329,14 +417,18 @@ func _handle_events() -> void:
 func _hex_pos(h: Vector2i) -> Vector3:
 	var p: Vector2 = Hex.to_world(h, Scenario.HEX_SIZE,
 		Scenario.HEX_SQUASH)
-	return Vector3(p.x * Scenario.WORLD_SCALE, 0.0,
+	var y := 0.0
+	match Scenario.wall_kind(h):
+		1: y = Scenario.TOWER_H
+		2: y = Scenario.KEEP_TOP_H
+	return Vector3(p.x * Scenario.WORLD_SCALE, y,
 		p.y * Scenario.WORLD_SCALE)
 
 
 func _say(line: String) -> void:
 	print("TOWERLOG ", line)
 	_log.append(line)
-	while _log.size() > 8:
+	while _log.size() > 9:
 		_log.pop_front()
 	if _l_log != null:
 		_l_log.text = "\n".join(_log)

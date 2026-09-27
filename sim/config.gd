@@ -215,6 +215,14 @@ const WEAPONS := {
 	# sword-parity 1d6 chosen conservatively. Pierce, not slash.
 	"bow":   {display_name = "Bow", damage = "1d6",
 		dmg_type = "pierce"},
+	# Tower-scenario creature weapons. Authored here rather than in the
+	# scenario because WEAPONS is a shared rule table and `_weapon_spec`
+	# falls back to a bare dice expression — an unknown weapon name would
+	# reach Dice.roll and assert. PROVISIONAL values.
+	"club":  {display_name = "Club", damage = "1d8",
+		dmg_type = "impact"},
+	"knife": {display_name = "Knife", damage = "1d4",
+		dmg_type = "pierce"},
 }
 
 ## Bow shot pacing (sim/combat.gd "shoot" autonomy): an arrow spends
@@ -685,6 +693,12 @@ const FIELD_PROPS := [
 	{kind = "pine", pos = Vector3(75, 0, -7), scale = 1.8,
 		blocks = 2.7},
 ]
+
+## Defended structures (Keep Integrity — `sim/structure.gd`). Althar's
+## Keep authors none: its battle is heroes versus a field of enemies, and
+## an empty list keeps `Battle.create` on exactly its previous path. The
+## tower scenario supplies a Keep here.
+const STRUCTURES := []
 
 ## The keep occupies whole cells too: everything west of the wall's
 ## field face is keep interior (2q+r <= KEEP_CELL_COL), and the two

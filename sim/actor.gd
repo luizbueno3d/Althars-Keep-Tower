@@ -77,6 +77,9 @@ var objective_id := ""    # assault objective for ai="march": the id of a
 var spells: Array = []    # support-spell ids this actor owns — the
                           # healer's kit; Support.cast refuses spells
                           # the caster does not know
+var spell_range := 0      # >0 overrides every spell's `range` for this
+                          # caster (Tower: Althar reaches the whole
+                          # battlefield); 0 = the spell's own range
 var heal_cd := 0.0        # Heal cooldown remaining — ACTIVE gameplay
                           # seconds (ticks in the live sim loop only)
 var resur_cd := 0.0       # Resurrection cooldown — 20 min of active,
@@ -123,6 +126,7 @@ static func create(d: Dictionary, rng = null) -> RefCounted:
 	a.participated = a.deployed
 	a.elevated = d.get("elevated", false)
 	a.spells = d.get("spells", []).duplicate()
+	a.spell_range = d.get("spell_range", 0)
 	a.objective_id = d.get("objective_id", "")
 	var Cfg = load("res://sim/config.gd")
 	for i in range(Cfg.BELT_SLOTS):
@@ -214,6 +218,7 @@ func to_dict() -> Dictionary:
 		ai = ai, leash = leash, act_cd = act_cd, move_cd = move_cd,
 		cd = cd,
 		focus_id = focus_id, focus_stall = focus_stall,
+		spell_range = spell_range,
 		heal_cd = heal_cd, resur_cd = resur_cd,
 		objective_id = objective_id,
 		spells = spells.duplicate(), belt = belt.duplicate(),
@@ -261,6 +266,7 @@ func apply_dict(d: Dictionary) -> void:
 	cd = d.get("cd", cd)
 	focus_id = d.get("focus_id", focus_id)
 	focus_stall = d.get("focus_stall", focus_stall)
+	spell_range = d.get("spell_range", spell_range)
 	objective_id = d.get("objective_id", objective_id)
 	heal_cd = d.get("heal_cd", heal_cd)
 	resur_cd = d.get("resur_cd", resur_cd)

@@ -29,6 +29,8 @@ var _last_hex := Vector2i(9999, 9999)
 var _last_lp := -1
 var _sway := 0.0
 var _dead := false
+var _selected := false
+var _targeted := false
 
 
 func _ready() -> void:
@@ -71,6 +73,7 @@ func bind(a, is_friendly: bool) -> void:
 	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_ring.material_override = rm
 	_ring.visible = true
+	_apply_ring()
 
 	if _model == null:
 		_model = _build_body(a)
@@ -86,6 +89,40 @@ func bind(a, is_friendly: bool) -> void:
 		_model.rotation.y = -PI * 0.25 if friendly else PI * 0.75
 	_place(a.hex)
 	_refresh_label()
+
+
+## Selected hero: gold, lifted ring. Enemy-mode targeting: enemies glow
+## hot while a spell is being aimed at them.
+func set_selected(on: bool) -> void:
+	_selected = on
+	_apply_ring()
+
+
+func set_targeted(on: bool) -> void:
+	_targeted = on
+	_apply_ring()
+
+
+func _apply_ring() -> void:
+	if _ring == null or _ring.material_override == null:
+		return
+	var rm: StandardMaterial3D = _ring.material_override
+	var base := Color(0.35, 0.85, 0.45) if friendly \
+		else Color(0.85, 0.30, 0.25)
+	var e := 0.5
+	var sc := 1.0
+	if _targeted:
+		base = Color(1.0, 0.45, 0.2)
+		e = 3.2
+		sc = 1.22
+	if _selected:
+		base = Color(1.0, 0.80, 0.15)
+		e = 4.5
+		sc = 1.45
+	rm.albedo_color = Color(base.r, base.g, base.b, 0.95)
+	rm.emission = base
+	rm.emission_energy_multiplier = e
+	_ring.scale = Vector3(sc, 1.0, sc)
 
 
 func _build_body(a) -> Node3D:
@@ -153,6 +190,9 @@ func _process(dt: float) -> void:
 		_sway += dt
 		_model.position.y = sin(_sway * 2.1) * 0.035
 		_model.rotation.z = sin(_sway * 1.3) * 0.03
+	if _selected and _ring != null:
+		var p := 1.45 * (1.0 + 0.09 * sin(Time.get_ticks_msec() * 0.008))
+		_ring.scale = Vector3(p, 1.0, p)
 	if _dead and label != null:
 		label.modulate.a = maxf(0.0, label.modulate.a - dt * 0.25)
 

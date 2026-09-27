@@ -152,6 +152,67 @@ func run(t) -> void:
 	t.eq(r.type, "command_attack", "secondary orders an attack too")
 	cs.primary(_pick("ground", "", Vector2i.ZERO))
 
+	# ally_alive (heal): friendly pick casts, others reject
+	cs.primary(_pick("friendly", "healer"))
+	cs.arm("heal", "ally_alive")
+	r = cs.primary(_pick("enemy", "skeleton_a"))
+	t.eq(r.type, "reject", "ally_alive armed + enemy rejects")
+	t.eq(r.reason, "choose_ally", "rejection asks for an ally")
+	t.eq(cs.armed, "heal", "still armed after reject")
+	r = cs.primary(_pick("friendly", "warrior"))
+	t.eq(r.type, "cast_actor", "ally_alive + friendly -> cast_actor")
+	t.eq(r.caster, "healer", "the healer is the caster")
+	t.eq(r.target, "warrior", "target carried through")
+	cs.cancel()
+
+	# ally_dead (resurrect): only a fallen hero is legal
+	cs.arm("resurrect", "ally_dead")
+	r = cs.primary(_pick("friendly", "warrior"))
+	t.eq(r.type, "reject", "ally_dead + living ally rejects")
+	t.eq(r.reason, "choose_fallen", "rejection asks for the fallen")
+	r = cs.primary(_pick("fallen", "barbarian", Vector2i(3, 0)))
+	t.eq(r.type, "cast_actor", "ally_dead + fallen -> cast_actor")
+	t.eq(r.target, "barbarian", "fallen target carried")
+	cs.cancel()
+
+	# hero_destination (Teleport) is a two-tap flow
+	cs.primary(_pick("ground", "", Vector2i.ZERO))   # deselect -> wizard
+	cs.arm("teleport", "hero_destination")
+	r = cs.primary(_pick("enemy", "skeleton_a"))
+	t.eq(r.type, "reject", "teleport first tap on enemy rejects")
+	t.eq(r.reason, "choose_hero", "rejection asks for a hero")
+	r = cs.primary(_pick("friendly", "wizard"))
+	t.eq(r.reason, "choose_hero", "caster himself is not a source")
+	r = cs.primary(_pick("friendly", "warrior"))
+	t.eq(r.type, "teleport_source", "hero first tap stores the source")
+	t.eq(r.id, "warrior", "source id carried")
+	t.eq(cs.mode, CommandState.Mode.ABILITY_ARMED, "still armed")
+	t.eq(cs.tp_source, "warrior", "tp_source stored")
+	r = cs.primary(_pick("ground", "", Vector2i(7, 1)))
+	t.eq(r.type, "cast_teleport", "second tap -> cast_teleport")
+	t.eq(r.caster, "wizard", "caster is the armer")
+	t.eq(r.source, "warrior", "source carried")
+	t.eq(r.hex, Vector2i(7, 1), "destination hex carried")
+	cs.resolved(true)
+	t.eq(cs.tp_source, "", "resolved clears the teleport source")
+	t.eq(cs.mode, CommandState.Mode.NORMAL, "resolved disarms")
+
+	# cancel mid-teleport clears the stored source
+	cs.arm("teleport", "hero_destination")
+	cs.primary(_pick("friendly", "warrior"))
+	r = cs.cancel()
+	t.eq(r.type, "cancelled", "cancel exits mid-teleport")
+	t.eq(cs.tp_source, "", "cancel clears the teleport source")
+
+	# a fallen hero is inspectable but not selectable
+	r = cs.primary(_pick("fallen", "warrior", Vector2i(1, 0)))
+	t.eq(r.type, "inspect", "fallen hero tap -> inspect (NORMAL)")
+	cs.primary(_pick("friendly", "barbarian"))
+	r = cs.primary(_pick("fallen", "warrior", Vector2i(1, 0)))
+	t.eq(r.type, "inspect", "fallen tap while selected -> inspect")
+	t.eq(cs.selected, "barbarian", "selection kept on fallen tap")
+	cs.primary(_pick("ground", "", Vector2i.ZERO))
+
 	# ============ SIM INTEGRATION (real tower battle) ============
 	# (a) a direct focus order overrides the AI's ordinary target
 	#     choice: the Warrior chases the FARTHEST enemy even though

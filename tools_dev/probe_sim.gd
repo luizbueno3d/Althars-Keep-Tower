@@ -94,6 +94,18 @@ func _init() -> void:
 	_check(S._on_road(bar.hex), "the Barbarian holds the road")
 	_check(not b.is_wall(war.hex) and not b.is_wall(bar.hex),
 		"the ground heroes are on the ground, not on towers")
+	var Targeting = load("res://sim/targeting.gd")
+	var Fireball = load("res://sim/fireball.gd")
+	var dist: int = Hex.distance(wiz.hex, S.SPAWN_HEXES[0])
+	_info("Althar spell_range / spawn distance",
+		"%d / %d" % [Targeting.range_of(wiz, S.FIREBALL), dist])
+	_check(Targeting.range_of(wiz, S.FIREBALL) >= dist,
+		"Althar's spell range reaches the spawn hex")
+	var cast_res: Array = Fireball.cast_at(b, "wizard", S.SPAWN_HEXES[0],
+		"fireball")
+	_check(cast_res[0] == true \
+			or (cast_res.size() > 1 and cast_res[1] != "out_of_range"),
+		"cast_at the spawn hex is not rejected for range")
 	_info("Archer tower", "%s  road distance %.1f m" % [arc.hex,
 		S.road_distance(arc.hex)])
 	_info("Healer tower", "%s  road distance %.1f m" % [hea.hex,

@@ -5,9 +5,10 @@ extends RefCounted
 ## this machine returns; device mapping (mouse/touch/keys) is a
 ## separate layer.
 ##
-## A pick is a Dictionary: {kind = "enemy"|"friendly"|"corpse"|"ground"|
-## "none", id = actor id or "", hex = Vector2i}. "corpse" is a dead
-## actor carrying loot; "none" is off the battlefield.
+## A pick is a Dictionary: {kind = "enemy"|"friendly"|"corpse"|"fallen"|
+## "ground"|"none", id = actor id or "", hex = Vector2i}. "corpse" is a
+## dead ENEMY carrying loot; "fallen" is a dead FRIENDLY hero (a
+## Resurrection target); "none" is off the battlefield.
 ##
 ## Every method returns ONE intent Dictionary with a `type`:
 ##   none · select{id} · deselect · inspect{id} · open_loot{id}
@@ -21,12 +22,16 @@ enum Mode { NORMAL, HERO_SELECTED, ABILITY_ARMED }
 const DEFAULT_HERO := "wizard"
 const T_GROUND := "ground"
 const T_ENEMY := "enemy"
+const T_ALLY_ALIVE := "ally_alive"
+const T_ALLY_DEAD := "ally_dead"
+const T_HERO_DEST := "hero_destination"
 
 var mode := Mode.NORMAL
 var selected := DEFAULT_HERO    # the ACTIVE hero; DEFAULT_HERO in NORMAL
 var armed := ""                 # ability id while ABILITY_ARMED
 var armed_by := ""              # caster (the active hero when armed)
 var armed_mode := ""            # Targeting mode string of the ability
+var tp_source := ""             # hero chosen in the teleport first tap
 var _prev_mode := Mode.NORMAL   # restored on cancel / resolved
 var paused := false             # ORTHOGONAL — never alters mode/selection
 var modal := ""                 # "", "loot", "menu", "save" — orthogonal
@@ -53,6 +58,7 @@ func _disarm() -> void:
 	armed = ""
 	armed_by = ""
 	armed_mode = ""
+	tp_source = ""
 
 ## Left click / tap.
 func primary(pick: Dictionary) -> Dictionary:
@@ -77,6 +83,33 @@ func primary(pick: Dictionary) -> Dictionary:
 							caster = armed_by, ability = armed,
 							target = pick.id}
 					return {type = "reject", reason = "choose_enemy"}
+				T_ALLY_ALIVE:
+					if pick.kind == "friendly":
+						return {type = "cast_actor",
+							caster = armed_by, ability = armed,
+							target = pick.id}
+					return {type = "reject", reason = "choose_ally"}
+				T_ALLY_DEAD:
+					if pick.kind == "fallen":
+						return {type = "cast_actor",
+							caster = armed_by, ability = armed,
+							target = pick.id}
+					return {type = "reject", reason = "choose_fallen"}
+				T_HERO_DEST:
+					# two taps: first the hero to move, then the
+					# destination hex (any non-"none" pick supplies it)
+					if tp_source == "":
+						if pick.kind == "friendly" \
+								and pick.id != armed_by:
+							tp_source = pick.id
+							return {type = "teleport_source",
+								id = pick.id}
+						return {type = "reject",
+							reason = "choose_hero"}
+					if pick.kind == "none":
+						return {type = "reject", reason = "off_field"}
+					return {type = "cast_teleport", caster = armed_by,
+						source = tp_source, hex = pick.hex}
 			return {type = "reject", reason = "unsupported_targeting"}
 		Mode.NORMAL:
 			match pick.kind:
@@ -88,6 +121,8 @@ func primary(pick: Dictionary) -> Dictionary:
 					return {type = "inspect", id = pick.id}
 				"corpse":
 					return {type = "open_loot", id = pick.id}
+				"fallen":
+					return {type = "inspect", id = pick.id}
 		Mode.HERO_SELECTED:
 			match pick.kind:
 				"enemy":
@@ -103,6 +138,8 @@ func primary(pick: Dictionary) -> Dictionary:
 					return _select(pick.id)
 				"corpse":
 					return {type = "open_loot", id = pick.id}
+				"fallen":
+					return {type = "inspect", id = pick.id}
 				_:
 					return _deselect()
 	return {type = "none"}

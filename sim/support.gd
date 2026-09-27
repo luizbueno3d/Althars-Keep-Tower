@@ -19,6 +19,7 @@ extends RefCounted
 const Hex = preload("res://sim/hex.gd")
 const Checks = preload("res://sim/checks.gd")
 const Progress = preload("res://sim/progress.gd")
+const Targeting = preload("res://sim/targeting.gd")
 
 ## Spell ids this path owns (config blocks live in Cfg.SPELLS).
 const KIT := ["heal", "resurrect", "haste", "aegis"]
@@ -76,7 +77,8 @@ static func cast(battle, caster_id: String, spell_id: String,
 			or target_id not in valid_targets(battle, caster_id,
 				spell_id):
 		return [false, "bad_target"]
-	if Hex.distance(caster.hex, target.hex) > spec.range:
+	if Hex.distance(caster.hex, target.hex) \
+			> Targeting.range_of(caster, spec):
 		return [false, "out_of_range"]
 
 	var left := cd_left(caster, spell_id)

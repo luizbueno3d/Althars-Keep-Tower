@@ -11,7 +11,9 @@ extends RefCounted
 ## Both launch the same projectile that advances through world space
 ## over ~1-2 s.
 ## update(dt)  -> moves the projectile; when impact is imminent, each living
-##                enemy inside the danger region rolls Perception; those who
+##                ACTOR inside the danger region rolls Perception — actors
+##                sharing the caster's faction get the canonical
+##                friendly-source bonus (they heard the warning); those who
 ##                pass (and have AP) roll Dodge and may move to a safer hex
 ##                BEFORE impact; at arrival the blast damages actors by
 ##                their FINAL hex distance from the target.
@@ -52,7 +54,7 @@ static func cast_at(battle, caster_id: String, target_hex: Vector2i,
 		return [false, "wrong_targeting"]
 	if not battle.hex_in_grid(target_hex):
 		return [false, "off_grid"]
-	if Hex.distance(caster.hex, target_hex) > cfg.range:
+	if Hex.distance(caster.hex, target_hex) > Targeting.range_of(caster, cfg):
 		return [false, "out_of_range"]
 	return _launch(battle, caster, target_hex, spell_id, cfg)
 
@@ -79,7 +81,7 @@ static func cast(battle, caster_id: String, target_id: String,
 	var target_hex: Vector2i = target.hex
 	if not battle.hex_in_grid(target_hex):
 		return [false, "off_grid"]
-	if Hex.distance(caster.hex, target_hex) > cfg.range:
+	if Hex.distance(caster.hex, target_hex) > Targeting.range_of(caster, cfg):
 		return [false, "out_of_range"]
 	return _launch(battle, caster, target_hex, spell_id, cfg)
 
@@ -154,10 +156,17 @@ static func _launch(battle, caster, target_hex: Vector2i,
 	return [true]
 
 ## Perception -> optional Dodge for one actor in the danger region.
-static func _resolve_perception(battle, a, spell: Dictionary) -> void:
+## `bonus`/`friendly_source` describe the friendly-source Perception
+## bonus (0.5): allies of the caster heard the warning — it is ONLY
+## a Perception bonus; Dodge DC, AP cost and blast damage are
+## unchanged for them.
+static func _resolve_perception(battle, a, spell: Dictionary,
+		bonus: int, friendly_source: bool) -> void:
 	battle.fireball.perceived[a.id] = true
-	var check := Checks.d20(battle.rng, a.perception, spell.perception_dc)
-	battle.emit({ type = "perception", actor = a, check = check })
+	var check := Checks.d20(battle.rng, a.perception + bonus,
+		spell.perception_dc)
+	battle.emit({ type = "perception", actor = a, check = check,
+		bonus = bonus, friendly_source = friendly_source })
 	if not check.passed:
 		return
 
@@ -264,10 +273,23 @@ static func update(battle, dt: float) -> void:
 		else remaining / fb.spell.speed
 
 	if t_impact <= fb.spell.perceive_time:
-		for a in battle.living_enemies():
-			if not fb.perceived.has(a.id) \
-					and _in_danger(battle, a, fb.target, fb.spell):
-				_resolve_perception(battle, a, fb.spell)
+		# every LIVING actor in the danger region may spot the incoming
+		# blast (0.5): allies of the caster get the friendly-source
+		# Perception bonus — they knew the weave was coming. A passed
+		# ally still needs the Dodge; a failed ally is hit normally.
+		var caster = battle.actors.get(fb.caster_id)
+		var fbonus: int = battle.config.SPELL_REACTION \
+			.friendly_source_perception_bonus
+		for id in battle.actor_order:
+			var a = battle.actors[id]
+			if not a.alive or fb.perceived.has(a.id):
+				continue
+			if not _in_danger(battle, a, fb.target, fb.spell):
+				continue
+			var friendly: bool = caster != null \
+				and a.faction == caster.faction
+			_resolve_perception(battle, a, fb.spell,
+				fbonus if friendly else 0, friendly)
 
 	if fb.get("instant"):
 		# No travel — count down the gather, then the effect lands.

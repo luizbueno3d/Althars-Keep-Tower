@@ -26,3 +26,11 @@ static func mode_of(spec: Dictionary) -> String:
 
 static func is_ground(spec: Dictionary) -> bool:
 	return mode_of(spec) == GROUND
+
+## A caster's effective reach for a spell: an actor with
+## `spell_range > 0` overrides the spell's own `range` (Tower:
+## Althar reaches the whole battlefield). 0 = the spell's value.
+static func range_of(caster, spec: Dictionary) -> int:
+	if caster.spell_range > 0:
+		return caster.spell_range
+	return int(spec.get("range", 0))

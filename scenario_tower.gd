@@ -31,6 +31,7 @@ const WEAPONS := Shared.WEAPONS
 const BOW := Shared.BOW
 const FEEDBACK := Shared.FEEDBACK
 const SPELLS := Shared.SPELLS
+const SPELL_REACTION := Shared.SPELL_REACTION
 const FIREBALL := Shared.FIREBALL
 const LIGHTNING := Shared.LIGHTNING
 const BLIZZARD := Shared.BLIZZARD
@@ -50,6 +51,11 @@ const HEX_SQUASH := Shared.HEX_SQUASH
 const WORLD_SCALE := Shared.WORLD_SCALE
 
 const SEED := 20260927
+
+## Althar commands from the Keep top and sees the whole front; his
+## effective spell range covers the battlefield (user decision — an
+## actor-level override, not a generic elevation rule).
+const ALTHAR_SPELL_RANGE := 99
 
 ## ---- SCENE: grid ---------------------------------------------------
 const GRID_CENTER := Vector2i(16, 0)
@@ -202,6 +208,7 @@ const HEROES := [
 		attributes = {str = 45, dex = 65, agi = 55, con = 55,
 			int = 92, cha = 80, mag = 96},
 		learned = {spellcasting = 10},
+		spell_range = ALTHAR_SPELL_RANGE,
 		hex = Vector2i(-3, 0),          # col -6 — the Keep top
 		elevated = true,
 	},
@@ -250,6 +257,19 @@ const HEROES := [
 		elevated = true,
 	},
 ]
+
+## ---- SCENE: hero action bar -----------------------------------------
+## Which abilities each hero exposes on the contextual action bar, in
+## slot order (keys 1-5). The targeting MODE of each ability comes from
+## `Targeting.mode_of(SPELLS[id])`. Meteor stays off the bar
+## (experimental) but key 5 arms it for testing.
+const HERO_ABILITIES := {
+	wizard = ["fireball", "lightning", "blizzard", "teleport"],
+	healer = HEALER_SPELLS,
+	warrior = [],
+	barbarian = [],
+	archer = [],
+}
 
 ## ---- SCENE: enemy spawn --------------------------------------------
 ## The far end of the road, upper-right. Individuals are dealt these in

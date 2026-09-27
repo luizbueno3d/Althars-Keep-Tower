@@ -9,6 +9,7 @@ extends RefCounted
 
 const Hex = preload("res://sim/hex.gd")
 const Cfg = preload("res://sim/config.gd")
+const Targeting = preload("res://sim/targeting.gd")
 
 ## Friendly living actors Althar may relocate (everyone but himself).
 static func valid_sources(battle, caster_id: String) -> Array:
@@ -23,7 +24,8 @@ static func valid_sources(battle, caster_id: String) -> Array:
 static func valid_dests(battle, caster) -> Array:
 	var out := []
 	for h in battle.valid.keys():
-		if Hex.distance(caster.hex, h) <= Cfg.TELEPORT.range \
+		if Hex.distance(caster.hex, h) <= Targeting.range_of(caster,
+				Cfg.TELEPORT) \
 				and battle.hex_free(h):
 			out.append(h)
 	return out
@@ -47,7 +49,7 @@ static func cast(battle, caster_id: String, source_id: String,
 		return [false, "not a friendly hero"]
 	if not battle.hex_in_grid(dest):
 		return [false, "beyond the field"]
-	if Hex.distance(c.hex, dest) > t.range:
+	if Hex.distance(c.hex, dest) > Targeting.range_of(c, t):
 		return [false, "beyond his reach"]
 	if not battle.hex_free(dest):
 		return [false, "the hex is occupied"]

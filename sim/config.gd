@@ -194,6 +194,15 @@ const FEEDBACK := {
 	critical_lp_frac = 0.25,
 }
 
+## Spell reaction tuning (0.5): actors sharing the caster's faction
+## get this bonus on the Perception check against his blast — they
+## heard the warning ("FIREBALL!"). PROVISIONAL balance value; it is
+## ONLY a Perception bonus — Dodge DC, AP cost and damage are
+## unchanged for allies (friendly fire is intentional).
+const SPELL_REACTION := {
+	friendly_source_perception_bonus = 4,
+}
+
 ## Player command tuning (Playable Party 0.5): a focus order the
 ## hero can never reach is dropped after `focus_stall_limit` failed
 ## steps instead of stalling him forever — he returns to autonomy

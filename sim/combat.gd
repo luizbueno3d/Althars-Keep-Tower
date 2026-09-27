@@ -24,6 +24,7 @@ const Damage = preload("res://sim/damage.gd")
 const Loot = preload("res://sim/loot.gd")
 const Progress = preload("res://sim/progress.gd")
 const Support = preload("res://sim/support.gd")
+const Targeting = preload("res://sim/targeting.gd")
 const Cfg = preload("res://sim/config.gd")
 
 static func update(battle, dt: float) -> void:
@@ -267,7 +268,7 @@ static func _mend(battle, a) -> bool:
 		return false
 	var spec: Dictionary = Cfg.SPELLS["heal"]
 	var d := Hex.distance(a.hex, t.hex)
-	if d > int(spec.range):
+	if d > Targeting.range_of(a, spec):
 		if _step(battle, a, t.hex):
 			a.cd = a.move_cd * a.cadence_mult()
 		else:

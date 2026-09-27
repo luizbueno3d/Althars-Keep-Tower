@@ -21,6 +21,7 @@ func eq(a, b, msg := "") -> void:
 func _initialize() -> void:
 	var modules := [
 		"res://tests/test_command_state.gd",
+		"res://tests/test_save_service.gd",
 	]
 	for m in modules:
 		print("== ", m.get_file())

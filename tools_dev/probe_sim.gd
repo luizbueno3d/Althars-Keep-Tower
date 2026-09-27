@@ -147,6 +147,46 @@ func _init() -> void:
 		_info("wave %d" % g, S.wave_for(g))
 	_check(S.wave_for(1) != S.wave_for(4),
 		"wave 4 asks a different question than wave 1")
+
+	# -- threat budget (PROVISIONAL) ---------------------------------
+	# Each archetype carries an integer `threat`; a wave's threat is the
+	# sum over its composition. Informational-first: the report prints
+	# the table and a monotone verdict without failing the probe — the
+	# budget is a design dial, not a correctness rule. Only the two
+	# facts the design commits to are hard-checked: every archetype
+	# carries a threat value, and an Ogre wave out-threats wave 1.
+	print("        -- wave threat (PROVISIONAL budget) --")
+	var threats: Array = []
+	var ogre_wave_threat := 0
+	for g in range(1, S.WAVES.size() + 1):
+		var comp: Dictionary = S.wave_for(g)
+		var parts: Array = []
+		var threat_sum := 0
+		for aid in comp:
+			var a: Dictionary = S.ENEMY_ARCHETYPES.get(aid, {})
+			var t: int = int(a.get("threat", 0))
+			threat_sum += t * int(comp[aid])
+			parts.append("%d×%s" % [int(comp[aid]), aid])
+		threats.append(threat_sum)
+		if comp.has("ogre"):
+			ogre_wave_threat = threat_sum
+		print("        wave %d: %s — threat %d" % [
+			g, " + ".join(parts), threat_sum])
+	var unthreatened := []
+	for aid in S.ENEMY_ARCHETYPES:
+		if int(S.ENEMY_ARCHETYPES[aid].get("threat", 0)) <= 0:
+			unthreatened.append(aid)
+	_check(unthreatened.is_empty(),
+		"every archetype carries a threat value%s" % [
+			"" if unthreatened.is_empty() else " — missing: %s" % unthreatened])
+	var monotone := true
+	for i in range(1, threats.size()):
+		if threats[i] < threats[i - 1]:
+			monotone = false
+	print("        threat non-decreasing across waves: %s" % [
+		"yes" if monotone else "NO — %s" % str(threats)])
+	_check(ogre_wave_threat > threats[0],
+		"the Ogre wave's threat exceeds wave 1's")
 	var w1 = S.build_roster(_seeded(), 1)
 	var w2 = S.build_roster(_seeded(), 1)
 	_check(w1.size() == w2.size(), "the same wave has the same size")

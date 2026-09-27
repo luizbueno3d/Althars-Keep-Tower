@@ -63,6 +63,10 @@ static func spawn(archetype: Dictionary, rng, id: String,
 	var d: Dictionary = archetype.duplicate(true)
 	d.id = id
 	d.hex = hex
+	# a generated individual, not an authored roster entry — Actor
+	# keeps this dict as its `spawn` so a save can rebuild it on a
+	# field where a fresh wave rolled different individuals
+	d._roster = true
 	if name != "":
 		d.display_name = name
 	var v: float = float(archetype.get("variation", 0.0))
@@ -97,6 +101,12 @@ static func build_wave(archetypes: Dictionary, composition: Dictionary,
 			var label: String = base.get("display_name", aid)
 			var nm := "%s %s" % [label, letters[i % letters.length()]] \
 				if n > 1 else label
-			out.append(spawn(base, rng,
-				"%s_w%d_%d" % [aid, wave, i], hex, nm))
+			var d: Dictionary = spawn(base, rng,
+				"%s_w%d_%d" % [aid, wave, i], hex, nm)
+			# the archetype's identity rides the individual —
+			# the threat report and inspect card read these
+			d.archetype = aid
+			d.variant = String(base.get("variant", ""))
+			d.threat = int(base.get("threat", 0))
+			out.append(d)
 	return out

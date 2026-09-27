@@ -301,6 +301,43 @@ func apply_save(data: Dictionary) -> void:
 	for id in actor_order:
 		if saved_actors.has(id):
 			actors[id].apply_dict(saved_actors[id])
+	if roster_builder.is_valid():
+		# GENERATED roster: wave individuals carry wave-specific ids,
+		# so the fresh wave this battle spawned is NOT the roster the
+		# save describes — the saved actors are. Rebuild every saved
+		# enemy the fresh field lacks from its recorded `spawn` dict
+		# (saved dicts carry no faction of their own — the spawn's
+		# does), then drop every fresh enemy the save does not know.
+		# Saved corpses keep their loot: they are IN saved_actors, so
+		# they are rebuilt/overlaid like anyone else.
+		# the append order is SORTED ids: a save dict's iteration
+		# order is not roster order (a JSON round-trip sorts keys),
+		# and actor_order feeds act/strike order — keep it stable
+		var missing: Array = []
+		for sid in saved_actors:
+			if actors.has(sid):
+				continue
+			var sp: Dictionary = saved_actors[sid].get("spawn", {})
+			if String(sp.get("faction", "")) == "enemy":
+				missing.append(sid)
+		missing.sort()
+		for sid in missing:
+			var svd: Dictionary = saved_actors[sid]
+			var rd: Dictionary = svd.spawn.duplicate(true)
+			for k in ["hex", "anchor"]:
+				# engine vectors were scrubbed to [x, y] on the way
+				# into the save — put them back before create()
+				if rd.get(k) is Array and rd[k].size() >= 2:
+					rd[k] = Vector2i(int(rd[k][0]), int(rd[k][1]))
+			var a = Actor.create(rd, rng)
+			a.apply_dict(svd)
+			actors[a.id] = a
+			actor_order.append(a.id)
+		for id in actor_order.duplicate():
+			if actors[id].faction == "enemy" \
+					and not saved_actors.has(id):
+				actors.erase(id)
+				actor_order.erase(id)
 	defense_lost = bool(data.get("defense_lost", defense_lost))
 	var saved_st: Dictionary = data.get("structures", {})
 	for id in structure_order:

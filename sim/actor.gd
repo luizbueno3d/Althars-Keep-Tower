@@ -92,6 +92,31 @@ var last_absorbed := 0    # transient: LP an Aegis barrier soaked in
 # ("" = empty). Quick-use applies the item to the wearer.
 var belt: Array = []
 
+# Equipment: `equipment` maps slot name -> worn item name. The worn
+# piece's modifiers are BAKED into the ordinary fields above
+# (weapon/attack/defense/shield/armor) at equip time and persist with
+# them — nothing re-derives on load. `equipment_stowed` records the
+# field values a worn piece DISPLACED (today: only `weapon`, which is
+# a replacement not a bonus) so unequip reverses exactly after a
+# save/load. `hero_class` is the eligibility key items' `usable_by`
+# lists test — "" means "no class", which matches nothing.
+var equipment := {}
+var equipment_stowed := {}
+var hero_class := ""
+
+# Generated-actor identity (roster scenarios such as the Tower):
+# `archetype` is the ENEMY_ARCHETYPES key, `variant` the archetype's
+# variant label, `threat` its authored danger rating — all stamped by
+# Enemy.build_wave; authored actors carry the defaults. `spawn` is a
+# JSON-safe copy of the whole creation dict kept only when the dict
+# was flagged `_roster` (a generated individual, not an authored
+# entry) — it lets apply_save rebuild wave actors whose ids a fresh
+# battle does not know.
+var archetype := ""
+var variant := ""
+var threat := 0
+var spawn := {}
+
 static func create(d: Dictionary, rng = null) -> RefCounted:
 	var a = (load("res://sim/actor.gd") as GDScript).new()
 	a.id = d.id
@@ -128,11 +153,43 @@ static func create(d: Dictionary, rng = null) -> RefCounted:
 	a.spells = d.get("spells", []).duplicate()
 	a.spell_range = d.get("spell_range", 0)
 	a.objective_id = d.get("objective_id", "")
+	a.hero_class = d.get("hero_class", "")
+	a.archetype = d.get("archetype", "")
+	a.variant = d.get("variant", "")
+	a.threat = int(d.get("threat", 0))
 	var Cfg = load("res://sim/config.gd")
 	for i in range(Cfg.BELT_SLOTS):
 		a.belt.append("")
 	a.progress = Progress.create(d)
+	if d.get("_roster", false):
+		# a generated individual keeps its creation dict so a save can
+		# rebuild it in a battle whose fresh wave has other ids —
+		# engine value types (hex/anchor Vector2i) cannot survive
+		# JSON, so the copy is scrubbed to plain arrays
+		a.spawn = _json_safe(d)
 	return a
+
+## Deep-copy into JSON-safe data: Vector2i/Vector2/Vector3i/Vector3/
+## Color collapse to plain number arrays; Dictionaries and Arrays are
+## scrubbed recursively. Scalars pass through unchanged.
+static func _json_safe(v):
+	if v is Vector2i or v is Vector2:
+		return [v.x, v.y]
+	if v is Vector3i or v is Vector3:
+		return [v.x, v.y, v.z]
+	if v is Color:
+		return [v.r, v.g, v.b, v.a]
+	if v is Dictionary:
+		var out := {}
+		for k in v:
+			out[k] = _json_safe(v[k])
+		return out
+	if v is Array:
+		var arr: Array = []
+		for e in v:
+			arr.append(_json_safe(e))
+		return arr
+	return v
 
 ## Apply damage; returns true if this damage killed the actor.
 ## AEGIS (Playable Party 0.5): while `effects.aegis` carries a pool,
@@ -200,7 +257,7 @@ func cadence_mult() -> float:
 # everything below is live run state worth persisting.
 
 func to_dict() -> Dictionary:
-	return {
+	var out := {
 		lp = lp, max_lp = max_lp, ap = ap, max_ap = max_ap,
 		mp = mp, max_mp = max_mp,
 		hex = [hex.x, hex.y], anchor = [anchor.x, anchor.y],
@@ -222,8 +279,17 @@ func to_dict() -> Dictionary:
 		heal_cd = heal_cd, resur_cd = resur_cd,
 		objective_id = objective_id,
 		spells = spells.duplicate(), belt = belt.duplicate(),
+		hero_class = hero_class,
+		equipment = equipment.duplicate(),
+		equipment_stowed = equipment_stowed.duplicate(true),
+		archetype = archetype, variant = variant, threat = threat,
 		progress = progress.to_dict() if progress != null else {},
 	}
+	if not spawn.is_empty():
+		# the rebuild recipe a generated-actor save rests on —
+		# already JSON-safe by construction
+		out.spawn = spawn.duplicate(true)
+	return out
 
 ## Overlay saved run state onto an actor built from its config entry.
 func apply_dict(d: Dictionary) -> void:
@@ -281,5 +347,14 @@ func apply_dict(d: Dictionary) -> void:
 		for i in range(belt.size()):
 			if belt[i] == null:
 				belt[i] = ""
+	hero_class = d.get("hero_class", hero_class)
+	equipment = d.get("equipment", {}).duplicate()
+	equipment_stowed = d.get("equipment_stowed", {}).duplicate(true)
+	archetype = d.get("archetype", archetype)
+	variant = d.get("variant", variant)
+	threat = int(d.get("threat", threat))
+	# NOTE: `spawn` is deliberately NOT read here — an actor restored
+	# from its spawn copy already carries it from create(); overlaying
+	# it again would only alias the save's copy.
 	if progress != null and d.get("progress") is Dictionary:
 		progress.apply_dict(d.progress)

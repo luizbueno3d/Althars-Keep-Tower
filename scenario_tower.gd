@@ -43,6 +43,7 @@ const HASTE := Shared.HASTE
 const AEGIS := Shared.AEGIS
 const HEALER_SPELLS := Shared.HEALER_SPELLS
 const ITEMS := Shared.ITEMS
+const MARKET := Shared.MARKET
 const BELT_SLOTS := Shared.BELT_SLOTS
 const ENCOUNTER_XP := Shared.ENCOUNTER_XP
 const LOOT := Shared.LOOT
@@ -113,6 +114,18 @@ const KEEP_ID := "keep"
 ## between waves by the orchestrator. PROVISIONAL — no worker simulation,
 ## no economy. 0 would mean "no repair at all".
 const KEEP_REPAIR_PER_WAVE := 25
+
+## ---- SCENE: the market ---------------------------------------------
+## What the peddler sells between waves (sim/market.gd reads this off the
+## scenario). Every `kind = "equipment"` piece in the shared ITEMS table
+## plus the consumables and trinkets, sorted by `value`. PROVISIONAL
+## prices: the shared `value` fields are themselves provisional.
+const MARKET_STOCK := [
+	"Small Potion", "Potion of Vigor", "Bone Charm", "Rusty Sword",
+	"Old Coin", "Wooden Shield", "Bear Talisman", "Leather Jerkin",
+	"Woodsman's Axe", "Hunting Bow", "Soldier's Sword", "Sentinel Ring",
+	"Warded Robe",
+]
 
 ## Presentation heights (metres) of the two elevated levels. Scene data,
 ## not rules: the simulation's elevation is `wall_kind` (a LEVEL, not a
@@ -294,6 +307,10 @@ const SPAWN_HEXES := [
 const VARIATION := 0.20
 const SKELETON_RESIST := {pierce = 0.80}
 
+## `threat` is a PROVISIONAL threat budget: one integer per archetype,
+## summed per wave by the probe's report. It is a READ-ONLY difficulty
+## score for tooling and the inspect card — the combat rules never read
+## it. Tune freely; the scale only needs to be self-consistent.
 const ENEMY_ARCHETYPES := {
 	"skeleton": {
 		display_name = "Skeleton", faction = "enemy",
@@ -303,6 +320,7 @@ const ENEMY_ARCHETYPES := {
 		act_cd = 2.4, move_cd = 1.5,
 		resist = SKELETON_RESIST,
 		variation = VARIATION,
+		threat = 2,
 	},
 	"skeleton_archer": {
 		display_name = "Skeleton Archer", faction = "enemy",
@@ -312,6 +330,7 @@ const ENEMY_ARCHETYPES := {
 		act_cd = 2.8, move_cd = 1.4,
 		resist = SKELETON_RESIST,
 		variation = VARIATION,
+		threat = 3,
 	},
 	"skeleton_warrior": {
 		display_name = "Skeleton Warrior", faction = "enemy",
@@ -323,6 +342,7 @@ const ENEMY_ARCHETYPES := {
 		# plate conducts; armor eats impact; bone still shrugs at cold
 		resist = {pierce = 0.80, electrical = 1.5, impact = 0.75},
 		variation = VARIATION,
+		threat = 5,
 	},
 	"ogre": {
 		display_name = "Ogre", faction = "enemy",
@@ -336,6 +356,7 @@ const ENEMY_ARCHETYPES := {
 		# through an invented damage bonus.
 		resist = {fire = 1.25, impact = 0.5},
 		variation = VARIATION,
+		threat = 12,
 	},
 	"goblin": {
 		display_name = "Goblin", faction = "enemy",
@@ -345,6 +366,7 @@ const ENEMY_ARCHETYPES := {
 		act_cd = 1.6, move_cd = 0.9,
 		resist = {},
 		variation = VARIATION,
+		threat = 1,
 	},
 }
 

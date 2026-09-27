@@ -156,3 +156,115 @@ static func _prune_belts(battle, name: String) -> void:
 		for i in range(a.belt.size()):
 			if String(a.belt[i]) == name:
 				a.belt[i] = ""
+
+# ---------------- equipment ----------------
+## kind "equipment" wears onto a hero through a named slot. The
+## piece's modifiers are BAKED into the actor's ordinary fields at
+## equip time (weapon/attack/defense/shield/armor) and persist as
+## normal fields — to_dict/apply_dict needs no equipment awareness.
+## `usable_by` (absent = any hero) names the hero ids or hero
+## classes allowed to wear the piece; `a.equipment` records only
+## WHAT is worn (slot -> item name), `a.equipment_stowed` remembers
+## the field a replacement displaced so unequip is exact.
+
+## The item's honest gold worth (MARKET sells at a ratio of it).
+static func value_of(cfg, name: String) -> int:
+	return int(def_of(cfg, name).get("value", 0))
+
+## [true] or [false, reason] — eligibility only, nothing held or
+## worn is required (the UI asks this to grey out gear).
+static func can_equip(actor, def: Dictionary) -> Array:
+	if def.get("kind") != "equipment":
+		return [false, "not equipment"]
+	if not def.has("slot"):
+		return [false, "no equipment slot"]
+	var usable: Array = def.get("usable_by", [])
+	if not usable.is_empty() \
+			and not (actor.id in usable) \
+			and not (actor.hero_class in usable):
+		return [false, "not his kit"]
+	return [true]
+
+## Wear `name` on its slot: validates eligibility and a held unit,
+## auto-unequips an occupant back to the pack, then bakes the
+## modifiers in and records the wear. Returns [true] or
+## [false, reason] — nothing moves on a refusal.
+static func equip(battle, actor_id: String, name: String) -> Array:
+	var a = battle.actors.get(actor_id)
+	if a == null or a.faction != "friendly":
+		return [false, "no such hero"]
+	var d := def_of(battle.config, name)
+	var ok: Array = can_equip(a, d)
+	if not ok[0]:
+		return ok
+	if count(battle.inventory, name) <= 0:
+		return [false, "none held"]
+	var slot := String(d.slot)
+	if String(a.equipment.get(slot, "")) != "":
+		# an occupied slot hands its piece back to the pack first —
+		# a swap is an unequip followed by an equip
+		var u: Array = unequip(battle, actor_id, slot)
+		if not u[0]:
+			return u
+	_apply_gear(a, slot, d, 1)
+	take_one(battle.inventory, name)
+	a.equipment[slot] = name
+	battle.emit({type = "equip", actor = a, item = name, slot = slot})
+	return [true]
+
+## Strip whatever `slot` wears: the modifiers reverse exactly and
+## the piece returns to the shared pack. [true] or [false, reason].
+static func unequip(battle, actor_id: String, slot: String) -> Array:
+	var a = battle.actors.get(actor_id)
+	if a == null or a.faction != "friendly":
+		return [false, "no such hero"]
+	var name := String(a.equipment.get(slot, ""))
+	if name == "":
+		return [false, "empty slot"]
+	_apply_gear(a, slot, def_of(battle.config, name), -1)
+	a.equipment.erase(slot)
+	add(battle.inventory, name, 1)
+	battle.emit({type = "unequip", actor = a, item = name,
+		slot = slot})
+	return [true]
+
+## Apply (sign +1) or remove (-1) a worn piece's field effects.
+## `weapon` is a REPLACEMENT, not a bonus — the displaced weapon is
+## stowed on the actor so stripping the piece restores exactly what
+## was there; every other modifier is plain integer arithmetic and
+## reverses by subtraction.
+static func _apply_gear(a, slot: String, d: Dictionary,
+		sign: int) -> void:
+	if d.has("weapon"):
+		if sign > 0:
+			a.equipment_stowed[slot] = {weapon = a.weapon}
+			a.weapon = String(d.weapon)
+		else:
+			var st: Dictionary = a.equipment_stowed.get(slot, {})
+			a.weapon = String(st.get("weapon", a.weapon))
+			a.equipment_stowed.erase(slot)
+	a.attack += sign * int(d.get("attack", 0))
+	a.defense += sign * int(d.get("defense", 0))
+	a.shield += sign * int(d.get("shield", 0))
+	var ar: Dictionary = d.get("armor", {})
+	if ar.has("lp"):
+		var lp_v: int = int(a.armor.get("lp", 0)) \
+			+ sign * int(ar.lp)
+		if lp_v == 0:
+			a.armor.erase("lp")
+		else:
+			a.armor["lp"] = lp_v
+	if ar.has("types"):
+		var ty: Dictionary = a.armor.get("types", {}).duplicate()
+		var add_types: Dictionary = ar.get("types", {})
+		for k in add_types:
+			var left: int = int(ty.get(k, 0)) \
+				+ sign * int(add_types[k])
+			if left == 0:
+				ty.erase(k)
+			else:
+				ty[k] = left
+		if ty.is_empty():
+			a.armor.erase("types")
+		else:
+			a.armor["types"] = ty

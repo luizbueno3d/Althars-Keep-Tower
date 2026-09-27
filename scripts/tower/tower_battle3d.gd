@@ -25,10 +25,13 @@ const Teleport = preload("res://sim/teleport.gd")
 const Targeting = preload("res://sim/targeting.gd")
 const Hex = preload("res://sim/hex.gd")
 const Progress = preload("res://sim/progress.gd")
+const Items = preload("res://sim/items.gd")
+const Market = preload("res://sim/market.gd")
 
 const EnvScene = preload("res://scripts/tower/tower_env3d.gd")
 const ActorView = preload("res://scripts/tower/tower_actor_view.gd")
 const CommandState = preload("res://scripts/tower/input/command_state.gd")
+const SaveService = preload("res://scripts/save_service.gd")
 
 const HOP_TIME := 0.28
 const KEEP_ID := "keep"
@@ -115,11 +118,34 @@ var _ability_btns: Array = []
 var _ability_ids: Array = []
 var _inspect_panel: PanelContainer
 var _l_inspect: Label
+var _equip_box: VBoxContainer
+var _inspect_id := ""
 var _loot_panel: PanelContainer
 var _l_loot: Label
 var _loot_id := ""
 var _pause_overlay: ColorRect
 var _b_handed: Button
+
+# saves (scripts/save_service.gd): versioned slots under user://saves/,
+# between waves only; --nosave disables the service entirely
+var _saves
+var _nosave := false
+var _save_smoke := false
+var _boot_panel: PanelContainer
+var _b_continue: Button
+var _b_save: Button
+var _slot_panel: PanelContainer
+var _slot_rows: VBoxContainer
+var _l_slot_title: Label
+var _slot_mode := ""
+var _slot_armed := ""            # occupied slot awaiting overwrite confirm
+var _slot_armed_btn: Button
+var _market_panel: PanelContainer
+var _market_list: VBoxContainer
+var _l_gold: Label
+var _b_buy_tab: Button
+var _b_sell_tab: Button
+var _market_tab := "buy"
 
 
 func _ready() -> void:
@@ -148,11 +174,16 @@ func _ready() -> void:
 			"--right": _force_handed = "right"
 			"--input-smoke": _smoke = true
 			"--poses": _poses = true
+			"--nosave": _nosave = true
+			"--save-smoke": _save_smoke = true
 	_load_settings()
 	if _force_handed != "":
 		_handed = _force_handed
 	if _smoke:
 		_handed = "right"          # smoke always runs right-handed
+	# the save service exists in every run; --nosave disables it so no
+	# file is ever created, read or written (dev/smoke/capture runs)
+	_saves = SaveService.new("", not _nosave)
 	_build_projectile()
 	_build_disc()
 	_build_hud()
@@ -183,6 +214,10 @@ func _ready() -> void:
 		_plan_smoke()
 	elif _poses:
 		_plan_poses()
+	elif _save_smoke:
+		_plan_save_smoke()
+	elif not _nosave and _saves.has_saves():
+		_open_boot()
 
 
 func _wave_text() -> String:
@@ -394,6 +429,9 @@ func _build_hud() -> void:
 	_build_inspect()
 	_build_loot()
 	_build_pause_overlay()
+	_build_boot()
+	_build_slot_panel()
+	_build_market()
 	_apply_layout()
 	_refresh_bar()
 
@@ -417,12 +455,15 @@ func _build_inspect() -> void:
 	_inspect_panel = PanelContainer.new()
 	_inspect_panel.visible = false
 	_inspect_panel.position = Vector2(190, 120)
-	_inspect_panel.custom_minimum_size = Vector2(300, 0)
+	_inspect_panel.custom_minimum_size = Vector2(340, 0)
 	var vb := VBoxContainer.new()
 	_inspect_panel.add_child(vb)
 	_l_inspect = Label.new()
 	_style_label(_l_inspect, 14)
 	vb.add_child(_l_inspect)
+	# friendly heroes get their equipment rows here (pause-and-equip)
+	_equip_box = VBoxContainer.new()
+	vb.add_child(_equip_box)
 	var close := Button.new()
 	close.text = "Close"
 	close.pressed.connect(_close_inspect)
@@ -469,11 +510,430 @@ func _build_pause_overlay() -> void:
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style_label(t, 40)
 	vb.add_child(t)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	for spec in [["RESUME", _on_resume_btn], ["SAVE", _on_save_btn],
+			["LOAD", _on_load_btn], ["MARKET", _on_market_btn]]:
+		var b := Button.new()
+		b.text = spec[0]
+		b.custom_minimum_size = Vector2(120, 52)
+		b.pressed.connect(spec[1])
+		row.add_child(b)
+		if spec[0] == "SAVE":
+			_b_save = b
 	_b_handed = Button.new()
 	_b_handed.custom_minimum_size = Vector2(300, 56)
 	_b_handed.pressed.connect(_toggle_handedness)
 	vb.add_child(_b_handed)
 	_hud.add_child(_pause_overlay)
+
+
+## ---- boot modal -------------------------------------------------------
+## When any save exists at launch the game opens paused on this panel:
+## CONTINUE restores the newest valid save (manual slots AND the
+## autosave), NEW GAME starts the fresh battle already built in _ready.
+
+func _build_boot() -> void:
+	_boot_panel = PanelContainer.new()
+	_boot_panel.visible = false
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	_boot_panel.add_child(vb)
+	var t := Label.new()
+	t.text = "ALTHAR'S KEEP — TOWER"
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(t, 26)
+	vb.add_child(t)
+	var sub := Label.new()
+	sub.text = "a saved defense exists"
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(sub, 14)
+	vb.add_child(sub)
+	_b_continue = Button.new()
+	_b_continue.custom_minimum_size = Vector2(380, 52)
+	_b_continue.pressed.connect(_on_boot_continue)
+	vb.add_child(_b_continue)
+	var b_new := Button.new()
+	b_new.text = "NEW GAME"
+	b_new.custom_minimum_size = Vector2(380, 52)
+	b_new.pressed.connect(_on_boot_new)
+	vb.add_child(b_new)
+	_boot_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_hud.add_child(_boot_panel)
+
+
+func _open_boot() -> void:
+	paused = true
+	state.paused = true
+	state.open_modal("boot")
+	var latest: String = _saves.latest_valid()
+	_b_continue.disabled = latest == ""
+	_b_continue.text = "CONTINUE" if latest == "" \
+		else "CONTINUE — %s" % _slot_label(latest)
+	_boot_panel.visible = true
+
+
+func _close_boot() -> void:
+	_execute(state.close_modal())
+	paused = false
+	state.paused = false
+	_refresh_hud()
+
+
+func _on_boot_continue() -> void:
+	var latest: String = _saves.latest_valid()
+	if latest == "":
+		return
+	if _load_slot(latest):
+		_close_boot()
+		_say("CONTINUE — restored %s" % _slot_title_of(latest))
+
+
+func _on_boot_new() -> void:
+	_close_boot()
+	_say("A NEW DEFENSE BEGINS")
+
+
+## ---- save/load slot modal -------------------------------------------
+## One panel, two modes: SAVE writes slots (occupied slots re-arm to
+## "OVERWRITE SLOT N?" before anything is touched), LOAD restores them.
+## The autosave rides the LOAD list as "AUTOSAVE"; it never appears as
+## a manual slot. Empty/corrupt rows are disabled in LOAD.
+
+func _build_slot_panel() -> void:
+	_slot_panel = PanelContainer.new()
+	_slot_panel.visible = false
+	_slot_panel.custom_minimum_size = Vector2(560, 0)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	_slot_panel.add_child(vb)
+	_l_slot_title = Label.new()
+	_l_slot_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(_l_slot_title, 22)
+	vb.add_child(_l_slot_title)
+	# capped height: the battlefield stays visible behind every panel
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(540, 280)
+	vb.add_child(scroll)
+	_slot_rows = VBoxContainer.new()
+	_slot_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_slot_rows)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.custom_minimum_size = Vector2(120, 44)
+	cancel.pressed.connect(_close_slot_panel)
+	vb.add_child(cancel)
+	_slot_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_hud.add_child(_slot_panel)
+
+
+func _open_slot_modal(mode: String) -> void:
+	_slot_mode = mode
+	_slot_armed = ""
+	_slot_armed_btn = null
+	state.open_modal(mode)
+	_populate_slots()
+	_slot_panel.visible = true
+
+
+func _slot_title_of(name: String) -> String:
+	return "AUTOSAVE" if name == "autosave" \
+		else name.to_upper().replace("_", " ")
+
+
+func _fmt_time(unix: int) -> String:
+	if unix <= 0:
+		return ""
+	var d := Time.get_time_dict_from_unix_time(unix)
+	return "%02d:%02d" % [int(d.hour), int(d.minute)]
+
+
+## "SLOT 3 — wave 4 — Althar Lv2, ... — 21:14"
+func _slot_label(name: String) -> String:
+	var row: Dictionary = _saves.slot_info(name)
+	var head := _slot_title_of(name)
+	if row.empty:
+		return "%s — EMPTY —" % head
+	if row.corrupt:
+		return "%s — UNREADABLE" % head
+	return "%s — wave %d — %s — %s" % [head, int(row.wave),
+		String(row.party_text), _fmt_time(int(row.saved_at))]
+
+
+func _populate_slots() -> void:
+	_l_slot_title.text = "SAVE — pick a slot" if _slot_mode == "save" \
+		else "LOAD — pick a slot"
+	for c in _slot_rows.get_children():
+		c.queue_free()
+	var names: Array = []
+	if _slot_mode == "load" \
+			and not _saves.slot_info("autosave").empty:
+		names.append("autosave")
+	names.append_array(_saves.slot_names())
+	for name in names:
+		var row: Dictionary = _saves.slot_info(name)
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(0, 46)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.text = _slot_label(name)
+		if _slot_mode == "load" and (row.empty or row.corrupt):
+			b.disabled = true
+		elif row.corrupt:
+			b.disabled = true          # never overwrite a foreign save
+		var n: String = name
+		b.pressed.connect(_on_slot_row.bind(n, b))
+		_slot_rows.add_child(b)
+
+
+func _on_slot_row(name: String, btn: Button) -> void:
+	if _slot_mode == "load":
+		if _load_slot(name):
+			_close_slot_panel()
+		return
+	var row: Dictionary = _saves.slot_info(name)
+	if not row.empty and _slot_armed != name:
+		# an occupied slot demands a second, confirming press
+		if _slot_armed_btn != null:
+			_slot_armed_btn.text = _slot_label(_slot_armed)
+		_slot_armed = name
+		_slot_armed_btn = btn
+		btn.text = "OVERWRITE %s?" % _slot_title_of(name)
+		return
+	var res: Array = _saves.save(name, sim)
+	if res[0]:
+		_saves.set_active(name)
+		_l_hint.text = "Saved — %s" % _slot_title_of(name)
+		_say("SAVED %s (wave %d)" % [name, sim.group_index])
+	else:
+		_l_hint.text = _save_fail_text(str(res[1]))
+	_close_slot_panel()
+
+
+func _close_slot_panel() -> void:
+	_slot_panel.visible = false
+	_slot_armed = ""
+	_slot_armed_btn = null
+	if state.modal == "save" or state.modal == "load":
+		_execute(state.cancel())
+
+
+func _save_fail_text(reason: String) -> String:
+	match reason:
+		"between_waves":
+			return "Save between waves — finish this group first"
+		"nosave":
+			return "saves disabled (--nosave)"
+	return "save failed — %s" % reason
+
+
+func _on_save_btn() -> void:
+	if _nosave or not _saves.enabled:
+		_l_hint.text = _save_fail_text("nosave")
+		return
+	if not sim.encounter_done:
+		_l_hint.text = _save_fail_text("between_waves")
+		return
+	_open_slot_modal("save")
+
+
+func _on_load_btn() -> void:
+	_open_slot_modal("load")
+
+
+func _on_resume_btn() -> void:
+	_execute(state.toggle_pause())
+
+
+## Cmd+S / Ctrl+S: write the ACTIVE slot, or open the save modal when
+## none has been picked yet. Mid-wave the same between-waves hint.
+func _on_quick_save() -> void:
+	if _nosave or not _saves.enabled:
+		_l_hint.text = "saves disabled (--nosave)"
+		return
+	if not sim.encounter_done:
+		_l_hint.text = _save_fail_text("between_waves")
+		return
+	var res: Array = _saves.quick_save(sim)
+	if res[0]:
+		_l_hint.text = "QUICK SAVED — %s" % _slot_title_of(_saves.active())
+		_say("QUICK SAVE %s" % _saves.active())
+	elif res[1] == "no_active_slot":
+		_open_slot_modal("save")
+	else:
+		_l_hint.text = _save_fail_text(str(res[1]))
+
+
+## ---- market panel -----------------------------------------------------
+## Two tabs over the shared sim/market.gd: BUY lists the scenario's
+## MARKET_STOCK (name, slot, eligible heroes via Items.can_equip, price;
+## greyed when the party can't pay), SELL lists the pack. The peddler's
+## gold sits on top.
+
+func _build_market() -> void:
+	_market_panel = PanelContainer.new()
+	_market_panel.visible = false
+	_market_panel.custom_minimum_size = Vector2(560, 0)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	_market_panel.add_child(vb)
+	var t := Label.new()
+	t.text = "MARKET"
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(t, 22)
+	vb.add_child(t)
+	_l_gold = Label.new()
+	_l_gold.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(_l_gold, 16)
+	vb.add_child(_l_gold)
+	var tabs := HBoxContainer.new()
+	tabs.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_child(tabs)
+	_b_buy_tab = Button.new()
+	_b_buy_tab.text = "BUY"
+	_b_buy_tab.custom_minimum_size = Vector2(120, 44)
+	_b_buy_tab.pressed.connect(_on_market_tab.bind("buy"))
+	tabs.add_child(_b_buy_tab)
+	_b_sell_tab = Button.new()
+	_b_sell_tab.text = "SELL"
+	_b_sell_tab.custom_minimum_size = Vector2(120, 44)
+	_b_sell_tab.pressed.connect(_on_market_tab.bind("sell"))
+	tabs.add_child(_b_sell_tab)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(540, 220)
+	vb.add_child(scroll)
+	_market_list = VBoxContainer.new()
+	_market_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_market_list)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.custom_minimum_size = Vector2(120, 44)
+	cancel.pressed.connect(_close_market)
+	vb.add_child(cancel)
+	_market_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_hud.add_child(_market_panel)
+
+
+func _on_market_btn() -> void:
+	state.open_modal("market")
+	_refresh_market()
+	_market_panel.visible = true
+
+
+func _close_market() -> void:
+	_market_panel.visible = false
+	if state.modal == "market":
+		_execute(state.cancel())
+
+
+func _on_market_tab(tab: String) -> void:
+	_market_tab = tab
+	_refresh_market()
+
+
+func _eligible_text(d: Dictionary) -> String:
+	if d.get("kind") != "equipment":
+		return "goods"
+	var names: Array = []
+	for id in sim.actor_order:
+		var a = sim.actors[id]
+		if a.faction == "friendly" \
+				and bool(Items.can_equip(a, d)[0]):
+			names.append(a.display_name)
+	return "any hero" if names.size() == 5 else ", ".join(names)
+
+
+func _refresh_market() -> void:
+	_l_gold.text = "GOLD  %d" % sim.inventory.gold
+	for c in _market_list.get_children():
+		c.queue_free()
+	if _market_tab == "buy":
+		for name in Scenario.MARKET_STOCK:
+			var d := Items.def_of(Scenario, name)
+			var price := Items.value_of(Scenario, name)
+			var b := Button.new()
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.text = "%s   [%s]   %dg   — %s" % [name,
+				String(d.get("slot", "—")), price, _eligible_text(d)]
+			b.disabled = sim.inventory.gold < price
+			var n: String = name
+			b.pressed.connect(_on_buy.bind(n))
+			_market_list.add_child(b)
+	else:
+		if sim.inventory.items.is_empty():
+			var l := Label.new()
+			l.text = "the pack is empty"
+			_style_label(l, 14)
+			_market_list.add_child(l)
+		for s in sim.inventory.items:
+			var name := String(s.name)
+			var price := Market.sell_price(Scenario, name)
+			var b := Button.new()
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.text = "%s   x%d   sell %dg" % [name, int(s.qty), price]
+			var n: String = name
+			b.pressed.connect(_on_sell.bind(n))
+			_market_list.add_child(b)
+
+
+func _on_buy(name: String) -> void:
+	var res: Array = Market.buy(sim, name)
+	_say("bought %s" % name if res[0] \
+		else "buy refused — %s" % res[1])
+	_refresh_market()
+
+
+func _on_sell(name: String) -> void:
+	var res: Array = Market.sell(sim, name)
+	_say("sold %s" % name if res[0] \
+		else "sell refused — %s" % res[1])
+	_refresh_market()
+
+
+## ---- save/load --------------------------------------------------------
+
+## Restore one slot: a FRESH sim (authored fields stay authoritative)
+## overlaid with the saved run, then a full view rebuild — wave actors
+## carry wave-specific ids, so the restored field may contain corpses
+## and individuals this battle's fresh wave never spawned. CommandState
+## resets with the field; pause carries over.
+func _load_slot(name: String) -> bool:
+	var res: Array = _saves.load_slot(name)
+	var data: Dictionary = res[0]
+	if data.is_empty():
+		_l_hint.text = "load failed — %s" % res[1]
+		return false
+	var fresh = Battle.create(Scenario, Callable(Scenario, "build_roster"))
+	fresh.apply_save(data.battle)
+	sim = fresh
+	for id in views:
+		views[id].queue_free()
+	views.clear()
+	for id in sim.actor_order:
+		var a = sim.actors[id]
+		var v = ActorView.new()
+		add_child(v)
+		v.bind(a, a.faction == "friendly")
+		if not a.alive:
+			v.died()
+		views[id] = v
+	hops.clear()
+	_cast_t0 = -1.0
+	_proj.visible = false
+	_proj_light.visible = false
+	_disc.visible = false
+	_loot_id = ""
+	_inspect_id = ""
+	state = CommandState.new()
+	state.paused = paused
+	_close_modal_views()
+	if name != "autosave":
+		_saves.set_active(name)
+	_say("LOADED %s — wave %d" % [name, sim.group_index])
+	_refresh_hud()
+	_refresh_bar()
+	return true
 
 
 ## ---- handedness (one layout, mirrored anchors) -----------------------
@@ -704,6 +1164,13 @@ func _select(id: String) -> void:
 	for k in _portrait_btns:
 		_portrait_btns[k].modulate = Color(1.0, 0.85, 0.4) if k == id \
 			and id != "" else Color(1, 1, 1)
+	# a selected hero brings up his card — where equipment lives
+	if id == "":
+		_close_inspect()
+	else:
+		var a = sim.actors.get(id)
+		if a != null and a.faction == "friendly" and a.alive:
+			_show_inspect(id)
 	_refresh_bar()
 
 
@@ -711,16 +1178,24 @@ func _show_inspect(id: String) -> void:
 	var a = sim.actors.get(id)
 	if a == null:
 		return
-	var archetype := id
-	var us := id.rfind("_")
-	if us > 0:
-		archetype = id.substr(0, us)
+	_inspect_id = id
+	var kind: String = a.archetype
+	if kind == "":
+		kind = a.hero_class if a.hero_class != "" else "hero"
 	var lines: Array = []
-	lines.append("%s   (%s)" % [a.display_name, archetype])
+	lines.append("%s   (%s)" % [a.display_name, kind])
+	if a.variant != "":
+		lines.append("variant: %s" % a.variant)
+	if a.threat > 0:
+		lines.append("threat %d" % a.threat)
 	lines.append("faction %s   %s" % [a.faction,
 		"alive" if a.alive else "dead"])
 	lines.append("LP %d/%d   AP %d/%d%s" % [a.lp, a.max_lp, a.ap,
 		a.max_ap, "   MP %d/%d" % [a.mp, a.max_mp] if a.has_mp() else ""])
+	if a.archetype != "":
+		# generated individual: the spawn-time rolls, made visible
+		lines.append("rolled  maxLP %d   maxAP %d   Per %d" % [
+			a.max_lp, a.max_ap, a.perception])
 	lines.append("Perception %d   Dodge %d   weapon %s   range %d" % [
 		a.perception, a.dodge, a.weapon, a.attack_range])
 	var armor := "none"
@@ -737,7 +1212,67 @@ func _show_inspect(id: String) -> void:
 	if a.focus_id != "":
 		lines.append("focus order: %s" % a.focus_id)
 	_l_inspect.text = "\n".join(lines)
+	_populate_equip(a)
 	_inspect_panel.visible = true
+
+
+## Pause-and-equip: a living hero's card lists the four equipment slots
+## (what is worn, an UNEQUIP per occupied slot) and every held pack item
+## he is eligible to wear. Plain rows over the shared Items rules.
+func _populate_equip(a) -> void:
+	for c in _equip_box.get_children():
+		c.queue_free()
+	if a == null or a.faction != "friendly" or not a.alive:
+		return
+	var head := Label.new()
+	head.text = "EQUIPMENT"
+	_style_label(head, 13)
+	_equip_box.add_child(head)
+	for slot in ["weapon", "shield", "armor", "accessory"]:
+		var worn := String(a.equipment.get(slot, ""))
+		var row := HBoxContainer.new()
+		var l := Label.new()
+		_style_label(l, 13)
+		l.text = "%s: %s" % [slot, worn if worn != "" else "—"]
+		l.custom_minimum_size = Vector2(230, 0)
+		row.add_child(l)
+		if worn != "":
+			var u := Button.new()
+			u.text = "UNEQUIP"
+			var s: String = slot
+			u.pressed.connect(_on_unequip.bind(a.id, s))
+			row.add_child(u)
+		_equip_box.add_child(row)
+		for stack in sim.inventory.items:
+			var name := String(stack.name)
+			var d := Items.def_of(Scenario, name)
+			if String(d.get("slot", "")) != slot:
+				continue
+			if int(stack.qty) <= 0:
+				continue
+			if not bool(Items.can_equip(a, d)[0]):
+				continue
+			var eb := Button.new()
+			eb.text = "    equip %s (x%d)" % [name, int(stack.qty)]
+			var n: String = name
+			eb.pressed.connect(_on_equip.bind(a.id, n))
+			_equip_box.add_child(eb)
+
+
+func _on_equip(hero_id: String, name: String) -> void:
+	var res: Array = Items.equip(sim, hero_id, name)
+	_say("%s equips %s" % [hero_id, name] if res[0] \
+		else "equip refused — %s" % res[1])
+	_show_inspect(hero_id)
+	_refresh_hud()
+
+
+func _on_unequip(hero_id: String, slot: String) -> void:
+	var res: Array = Items.unequip(sim, hero_id, slot)
+	_say("%s unequips %s" % [hero_id, slot] if res[0] \
+		else "unequip refused — %s" % res[1])
+	_show_inspect(hero_id)
+	_refresh_hud()
 
 
 func _close_inspect() -> void:
@@ -771,6 +1306,11 @@ func _close_loot() -> void:
 func _close_modal_views() -> void:
 	_loot_panel.visible = false
 	_inspect_panel.visible = false
+	_slot_panel.visible = false
+	_market_panel.visible = false
+	_boot_panel.visible = false
+	_slot_armed = ""
+	_slot_armed_btn = null
 
 
 func _on_cast_started() -> void:
@@ -788,16 +1328,20 @@ func _on_cast_started() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.is_action_pressed("pause"):
+			if state.modal == "boot":
+				return               # boot answers only CONTINUE/NEW GAME
 			_execute(state.toggle_pause())
 			return
 		if event.is_action_pressed("cancel"):
 			_execute(state.cancel())
 			return
+		if state.modal != "":
+			return                   # a modal owns every other key
 		if event.is_action_pressed("next_wave"):
 			_next_wave()
 			return
 		if event.is_action_pressed("quick_save"):
-			_l_hint.text = "Save slots arrive in the next milestone"
+			_on_quick_save()
 			return
 		for n in 5:
 			if event.is_action_pressed("ability_%d" % (n + 1)):
@@ -1132,6 +1676,9 @@ func _handle_events() -> void:
 				_banner_t = 3.0
 				_say("WAVE %d CLEARED — press N for the next group" \
 					% e.group)
+				if _saves.enabled and _saves.autosave(sim)[0]:
+					_say("Autosaved")
+					_l_hint.text = "Autosaved"
 			"structure_hit":
 				_flash = 0.18
 			"structure_state":
@@ -1147,6 +1694,14 @@ func _handle_events() -> void:
 			"loot":
 				_say("%s drops loot" % e.actor.display_name)
 			"loot_taken":
+				pass
+			"market_buy":
+				pass                # _on_buy/_on_sell already report
+			"market_sell":
+				pass
+			"equip":
+				pass
+			"unequip":
 				pass
 			"next_group":
 				pass
@@ -1371,3 +1926,88 @@ func _run_script() -> void:
 			and _elapsed >= float(_script[_script_i].t):
 		_script[_script_i].do.call()
 		_script_i += 1
+
+
+## --save-smoke: end-to-end save round-trip through the REAL UI path.
+## Phase A (no saves on disk): force the between-waves gate, pause,
+## press SAVE, press SLOT 1 — a real write. Phase B (a save exists):
+## open the boot modal, press CONTINUE — a real load. Both phases quit
+## on their own and print a verdict; run twice to cover the loop.
+func _plan_save_smoke() -> void:
+	if _saves.has_saves():
+		_script = [
+			{t = 0.6, do = func():
+				_open_boot()
+				print("SAVE SMOKE phase B — boot shown")},
+			{t = 1.4, do = func():
+				_tap(_b_continue.get_global_rect().get_center())},
+			{t = 2.4, do = _save_smoke_verify_load},
+			{t = 3.0, do = func(): get_tree().quit()},
+		]
+	else:
+		_script = [
+			{t = 0.6, do = func():
+				# between-waves gate is the legal save state; force it
+				# so the smoke doesn't have to fight a whole wave
+				sim.encounter_done = true
+				sim.structures["keep"].integrity = 175
+				sim.inventory.gold = 42
+				print("SAVE SMOKE phase A — battle marked dirty")},
+			{t = 1.4, do = func(): _execute(state.toggle_pause())},
+			{t = 2.2, do = func():
+				_tap(_b_save.get_global_rect().get_center())},
+			{t = 3.0, do = func():
+				_tap(_slot_rows.get_child(0)
+					.get_global_rect().get_center())},
+			{t = 3.8, do = _save_smoke_verify_save},
+			# exercise the market + equip handlers for real
+			{t = 4.2, do = func():
+				_on_market_btn()
+				_on_buy("Wooden Shield")
+				_on_market_tab("sell")
+				_close_market()
+				_show_inspect("warrior")
+				_on_equip("warrior", "Wooden Shield")
+				_close_inspect()},
+			{t = 4.6, do = _save_smoke_verify_market},
+			{t = 5.2, do = func(): get_tree().quit()},
+		]
+
+
+func _save_smoke_verify_save() -> void:
+	var row: Dictionary = _saves.slot_info("slot_1")
+	if not row.empty and int(row.wave) == 1:
+		print("SAVE SMOKE OK — slot_1 written (wave %d)" % int(row.wave))
+	else:
+		print("SAVE SMOKE FAIL — slot_1 was not written")
+
+
+func _save_smoke_verify_load() -> void:
+	var w = sim.actors.get("wizard")
+	var k = sim.structures.get("keep")
+	var ok: bool = sim.group_index == 1 and w != null and w.lp == 12 \
+		and k != null and k.integrity == 175 \
+		and int(sim.inventory.gold) == 42
+	var wave: int = sim.group_index
+	print("SAVE SMOKE %s — restored wave %d, keep %d/%d, Althar LP %d/%d, gold %d" % [
+		"OK" if ok else "FAIL", wave,
+		k.integrity if k != null else -1,
+		k.max_integrity if k != null else -1,
+		w.lp if w != null else -1,
+		w.max_lp if w != null else -1,
+		int(sim.inventory.gold)])
+
+
+## Phase A tail: the peddler sold a Wooden Shield for 15g (42 -> 27),
+## and the Warrior wears it — Items.can_equip baked shield +2.
+func _save_smoke_verify_market() -> void:
+	var held: int = Items.count(sim.inventory, "Wooden Shield")
+	var war = sim.actors.get("warrior")
+	var ok: bool = int(sim.inventory.gold) == 27 and held == 0 \
+		and war != null \
+		and String(war.equipment.get("shield", "")) == "Wooden Shield" \
+		and int(war.shield) == 9
+	print("SAVE SMOKE market/equip %s — gold %d, warrior shield %d, worn %s" % [
+		"OK" if ok else "FAIL", int(sim.inventory.gold),
+		int(war.shield) if war != null else -1,
+		String(war.equipment.get("shield", "")) if war != null else ""])

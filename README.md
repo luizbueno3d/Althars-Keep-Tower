@@ -28,7 +28,7 @@ branch and its own cinematic visual work.
 recorded in a SHA-256 manifest. `tools/sync-rules.sh` regenerates it;
 `--check` detects drift; **`tools/test.sh` runs the check first**, so a
 tower change cannot be reported done while the rules are out of sync.
-Althar's Keep's own suite (3646 assertions) runs as part of this
+Althar's Keep's own suite (3811 assertions) runs as part of this
 project's test entry point.
 
 ```
@@ -66,20 +66,24 @@ the live one rolls `2d6`; no support spells at all).
 
 ```bash
 tools/import.sh     # once per fresh clone — headless game runs cannot import GLBs
-tools/run.sh        # play
-tools/dev-run.sh    # dev launcher (isolated save slot, once saves exist)
-tools/probe.sh      # headless Scene 01 acceptance probe
-tools/test.sh       # rules sync + probe + Althar's Keep's own suite
+tools/run.sh        # play (real save directory: user://saves/)
+tools/dev-run.sh    # dev launcher — --nosave + TOWER_SAVE_DIR=user://saves_dev
+tools/probe.sh      # headless Scene 01 acceptance probe (incl. wave threat table)
+tools/test.sh       # rules sync + probe + tower suite + Althar's Keep's own suite
 tools/sync-rules.sh # regenerate sim/ from Althar's Keep
 ```
 
-In game: `1` Fireball · `2` Lightning · `3` Blizzard · `space` pause ·
-`N` next wave · `esc`/right-click cancel targeting. Click an enemy to
-cast.
+In game: `1–5` arm the selected hero's abilities · tap an enemy to
+target / order an attack · `space` pause (RESUME / SAVE / LOAD /
+MARKET / handedness) · `N` next wave · `esc`/right-click cancel ·
+`Cmd/Ctrl+S` quick save to the active slot. Mouse and touch are both
+first-class.
 
 Debug flags (after `--`): `--shot=SEC:FILE` capture · `--dump` print
 every actor's placement and the Keep's Integrity · `--autowave`
-auto-advance waves.
+auto-advance waves · `--nosave` never touches save files ·
+`--input-smoke` scripted input self-test · `--poses` screenshot poses ·
+`--save-smoke` scripted save→quit→continue verification.
 
 ---
 
@@ -157,11 +161,22 @@ tower-defence abilities:
 | 1 | **Fireball** | physical projectile, FIRE/HEAT explosion, AoE, slow and telegraphed |
 | 2 | **Lightning** | very fast electrical strike, single target, AP drain |
 | 3 | **Blizzard** | persistent ground-targeted CONTROL zone, cold ticks, AP drain |
-| 4 | **Teleport** | tactical hero deployment / repositioning (not yet wired in the blockout) |
+| 4 | **Teleport** | tactical hero repositioning — two taps: hero, then destination |
 
 Damage and resistance resolution remains Althar's Keep's — casting check
 vs DC 20, MP committed on the attempt, the successful casting total as
 the victims' Resistance DC, then Perception → Dodge → Resistance.
+
+Targeting is **explicit per spell** (`sim/targeting.gd` modes): Fireball
+and Blizzard are *ground* casts — any hex is legal, friendlies included
+(**friendly fire is intentional**) — Lightning is *enemy*-targeted,
+Heal/Haste/Aegis are *ally_alive*, Resurrection is *ally_dead*, Teleport
+is *hero_destination*. Althar's `spell_range` override covers the whole
+battlefield. The Fireball is a real projectile: travel time toward the
+committed point, and on approach every actor in the blast rolls
+Perception — allies of the caster get the configurable friendly-source
+bonus (`SPELL_REACTION.friendly_source_perception_bonus`: they heard
+the warning) — then Dodge, possibly stepping clear before impact.
 
 ### 3.4 The Archer tower
 
@@ -269,12 +284,25 @@ helmets — with **class-appropriate eligibility**:
 No "+9000 flaming legendary shoulder pad of infinity". Equipment should
 make physical and tactical sense.
 
-**Not implemented yet** — loot is wired to the existing pipeline, but the
-Scene 01 equipment pool and the equip UI are not built.
+**Now wired, minimally.** The pause overlay's MARKET button opens a
+two-tab peddler panel over the shared `sim/market.gd`: BUY lists the
+scenario's `MARKET_STOCK` (every `kind = "equipment"` piece plus the
+trinkets, sorted by `value` — prices are the shared, PROVISIONAL
+`value` fields; consumables are not stocked because the canonical
+table gives them no `value` yet and they would be free), SELL lists
+the shared pack at `floor(value * sell_ratio)`. Gold is the party's
+`inventory.gold`, shown at the top of the panel.
+
+Selecting a living hero opens his card, which lists the four
+equipment slots (weapon / shield / armor / accessory) with UNEQUIP
+buttons and every held pack item `Items.can_equip` allows him —
+eligibility is the item's `usable_by` against hero id/class. Equip
+and unequip work while paused (and live): modifiers bake in at equip
+and reverse exactly at unequip. Panels stay small and centered — the
+battlefield is never covered.
 
 **Pause is preserved.** Pause-and-manage is the expected tactical
-behaviour; equipment should also be usable live where the architecture
-permits. No inventory redesign.
+behaviour. No inventory redesign.
 
 ### 3.10 Keep upgrades and workers
 
@@ -368,6 +396,40 @@ Barbarian, enemy spawn, camera.
 18. Level normally through canonical progression.
 19. Pause and manage the party.
 20. Start the NEXT GROUP without resetting character progression.
+
+### 3.17 Command, selection and the pointer
+
+Every pointer gesture — mouse **and** touch — is normalised into a
+semantic pick and fed to a pure, tested state machine
+(`scripts/tower/input/command_state.gd`); the 3D scene only resolves
+picks and executes intents. Althar is the **default active hero**;
+tapping another hero selects him (ring + portrait light up, his card
+opens). Tapping an enemy with the Warrior or Barbarian selected is a
+direct **attack order** (`command_focus`) — the AI still does the
+fighting; an order the hero cannot reach is dropped after a stall
+limit and autonomy **resumes** (`command_dropped` event). Tapping bare
+ground deselects back to Althar. While a spell is armed every tap is a
+targeting attempt — never a selection — and the battlefield grid stays
+**invisible**: a translucent danger disc under the pointer carries the
+ground-target read, and legal enemy targets glow during enemy-targeted
+spells. The whole HUD is **handedness-mirrored** (pause overlay toggle,
+persisted to `user://settings.cfg`).
+
+### 3.18 Save slots — between waves
+
+Six manual slots plus an autosave under `user://saves/`
+(`scripts/save_service.gd`; `TOWER_SAVE_DIR` redirects the directory,
+`--nosave` disables it entirely). Saves are **between waves only** —
+every write refuses with `between_waves` while a group is in flight,
+because in-flight spells/zones do not serialize yet. Clearing a wave
+autosaves; `Cmd/Ctrl+S` quick-saves to the active slot; the pause
+overlay's SAVE/LOAD open the slot list (overwrite needs a confirming
+press; corrupt and foreign-schema files are labelled UNREADABLE and
+never touched). A save is the full sim state — heroes' pools, XP,
+inventory, the Keep's Integrity, and this wave's generated individuals
+with their rolled stats, corpses and loot. Launching with saves present
+opens a boot modal: CONTINUE (newest valid save, autosave included) or
+NEW GAME.
 
 ---
 
@@ -473,13 +535,16 @@ eligibility for our heroes.
 
 An enemy's individual stats are generated and stored **once**, at spawn.
 Seeded, configurable randomness makes tests and debug runs reproducible.
-If save/load ever occurs mid-encounter, the rolled values are preserved
-rather than re-rolled.
+Between-wave saves preserve the rolled values rather than re-rolling —
+the save records each generated individual's spawn dict, so a reload
+rebuilds the same creature (corpses and loot included) even though a
+fresh wave would have rolled different individuals. Mid-encounter saves
+remain future work.
 
-**Debug visibility matters** — development tooling must be able to
-inspect an enemy and see its archetype, variant, rolled Max LP/AP,
-attributes, weapon, armor, resistances and variation seed. These numbers
-are not hidden.
+**Debug visibility matters** — tapping an enemy shows its archetype,
+variant (if any), **threat** rating and rolled Max LP/AP/Perception on
+the inspect card; the probe prints the per-wave threat table. These
+numbers are not hidden.
 
 ### 4.9 Why variation exists
 
@@ -491,9 +556,15 @@ is tougher than the other one."
 
 ### 4.10 MVP starting rules
 
-Skeleton, Skeleton Archer, Skeleton Warrior, Ogre. Goblin if cheap. Orc
+Skeleton, Skeleton Archer, Skeleton Warrior, Ogre, Goblin. Orc
 and Skeleton Mage may exist as configurable/future archetypes without
 finished art or gameplay.
+
+Each archetype also carries a **PROVISIONAL `threat` budget** (skeleton
+2, skeleton_archer 3, skeleton_warrior 5, ogre 12, goblin 1) — a
+read-only difficulty score stamped onto every individual for tooling
+and the inspect card; combat never reads it. `tools/probe.sh` prints
+the per-wave threat table.
 
 **All of these numbers are BALANCE-CONFIG values, not hardcoded combat
 rules.** They will be play-tested and tuned.
@@ -514,23 +585,36 @@ rules.** They will be play-tested and tuned.
   deterministic, with the Skeleton pierce response and the Ogre profile.
 - **Wave compositions** that change the tactical question, and a
   next-group loop that rebuilds the roster with new individuals.
+- **Provisional threat budgets** per archetype, surfaced on the inspect
+  card (archetype, variant, threat, rolled stats) and in the probe's
+  wave report.
+- **Command/selection state machine** — Althar default, tap-to-select,
+  direct attack orders with autonomous resume and unreachable-order
+  fallback, explicit per-spell targeting modes, all tested headlessly.
+- **Mouse and touch first-class** input: taps select/target, drags pan,
+  wheel/pinch zooms; the HUD mirrors for left/right handedness.
+- **Save slots + autosave, between waves** (§3.18): six versioned slots,
+  autosave on wave clear, boot CONTINUE/NEW GAME, quick save, atomic
+  writes, corrupt/newer-schema files protected.
+- **Loot panel** (click a corpse, TAKE ALL), a **minimal market**
+  (buy/sell over `sim/market.gd`) and **pause-and-equip** on the hero
+  card via the shared equipment rules.
 - Procedural low-poly bodies for all five heroes with distinct
   silhouettes and weapons.
 - HUD: Keep Integrity bar, party pools, wave banner, event log.
 
 ### Not done yet (deliberately)
 
-- **Teleport is not wired** in the blockout (spell slots 1–3 only).
-- **Loot / equipment / inventory UI** — the pipeline exists, the Scene 01
-  pool and equip flow do not.
+- **Mid-wave saves** — a group in flight does not serialize (in-flight
+  spells/zones); saves happen between waves only, by design for now.
 - **XP / Level-Up presentation** — progression runs, but there is no
   character sheet, party rail or level-up UI in this project yet.
-- **Save/load** — no save system in this project yet.
-- **Pause-and-manage menus** — pause works; the management screens do not
-  exist.
+- **Pause-and-manage beyond equipment** — the party sheet, belt
+  assignment and consumable USE flows are not built.
 - **Blizzard/zone avoidance** — enemies do not yet avoid zones (an
   existing shared-sim gap that a defensive corridor makes more visible).
-- **Keep upgrades, workers, destructible towers** — architecture only.
+- **Keep upgrades, workers, destructible towers, healer personality
+  settings** — architecture and spec only.
 
 ---
 
@@ -540,7 +624,7 @@ rules.** They will be play-tested and tuned.
 |---|---|
 | **0 — isolation & scaffold** | *(done)* shared-rules mechanism, scenario, runnable scene |
 | **1 — Scene 01 blockout** | *(done)* composition, Keep Integrity, assault AI, archetypes, procedural bodies |
-| **2 — the playable loop** | Teleport, loot + equipment + inventory, XP/Level-Up UI, pause-and-manage, save/load |
+| **2 — the playable loop** | *(mostly done)* Teleport, loot, equipment + market, pause-and-equip, between-wave save/load. Left: XP/Level-Up UI, party sheet, mid-wave saves |
 | **3 — enemy depth** | Skeleton Archer / Warrior / Ogre presentation, Goblin, the susceptibility matrix tuned |
 | **4 — Keep depth** | breach changes traversal, damaged visual states, Keep Upgrades, a small worker repair system |
 | **5 — polish** | VFX, framing, feedback, balance, docs |
@@ -552,7 +636,7 @@ rules.** They will be play-tested and tuned.
 1. **Never fork the rules.** `sim/` is vendored and hash-checked. A rule
    change belongs in Althar's Keep's `sim/`, then `tools/sync-rules.sh`.
 2. **Run `tools/test.sh` before reporting done** — it checks the sync,
-   the probe, and Althar's Keep's own 3646 assertions.
+   the probe, and Althar's Keep's own 3811 assertions.
 3. **Presentation only in `scripts/tower/`.** No rules, no balance.
 4. **Never write to Althar's Keep's `assets/characters03/`** — that is the
    cinematic character pipeline. This game is low-poly.

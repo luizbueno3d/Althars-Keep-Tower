@@ -25,6 +25,7 @@ const WORLD_SCALE := 0.03   # sim px -> world metres (shared with battle3d)
 const ACTORS := [
 	{
 		id = "wizard", display_name = "Wizard", faction = "friendly",
+		hero_class = "wizard",
 		# CANONICAL Level-1 pools (Resource Model 0.2): not a
 		# frontline body (12 LP), less physical endurance than the
 		# martial heroes (16 AP), a deep magical reserve (20 MP —
@@ -51,6 +52,7 @@ const ACTORS := [
 	# what enters his zone and returns to his anchor.
 	{
 		id = "warrior", display_name = "Warrior", faction = "friendly",
+		hero_class = "warrior",
 		lp = 16, ap = 14, perception = 2, dodge = 1,
 		# CANONICAL Level-1 attributes (Character Foundations 0.2):
 		# peaks at AGI/CON — the reflexive, enduring defender.
@@ -66,6 +68,7 @@ const ACTORS := [
 	# pushes forward inside his responsibility but still holds an area.
 	{
 		id = "barbarian", display_name = "Barbarian", faction = "friendly",
+		hero_class = "barbarian",
 		lp = 15, ap = 12, perception = 3, dodge = 2,
 		# CANONICAL Level-1 attributes (Character Foundations 0.2):
 		# near-mortal STR — the offensive breaker.
@@ -86,6 +89,7 @@ const ACTORS := [
 	# values, not rolled and not yet balanced.
 	{
 		id = "archer", display_name = "Archer", faction = "friendly",
+		hero_class = "archer",
 		lp = 12, ap = 16, perception = 5, dodge = 3,
 		attributes = {str = 55, dex = 92, agi = 88, con = 65,
 			int = 72, cha = 70, mag = 10},
@@ -102,6 +106,7 @@ const ACTORS := [
 	# the production card's numeric pass.
 	{
 		id = "healer", display_name = "Healer", faction = "friendly",
+		hero_class = "healer",
 		lp = 13, ap = 15, mp = 22, perception = 3, dodge = 2,
 		attributes = {str = 55, dex = 68, agi = 62, con = 70,
 			int = 84, cha = 78, mag = 88},
@@ -786,21 +791,35 @@ const LOOT := {
 		"Potion of Vigor", "Old Coin"],
 }
 
-## ITEM DEFINITIONS (Inventory 0.1 — Playable Party 0.5).
-## Every lootable name maps here. kind: "consumable" gets a USE
-## flow; "equipment"/"trinket" are honest cargo until their systems
-## exist (no equip/sell rules yet). Consumable effects are
-## PROVISIONAL — no canonical potion rule existed; the numbers
-## mirror the scale of Heal I (up to 4 per pool) pending design.
-## effect.type: "restore_lp" | "restore_ap" — pools cap
-## independently at their max; "target" picks the valid set the
-## same way support spells do ("ally_alive").
+## ITEM DEFINITIONS (Inventory 0.1 — Playable Party 0.5; equipment
+## rules added for the shared sim). Every lootable name maps here.
+## kind: "consumable" gets a USE flow; "equipment" wears onto an
+## actor through sim/items.gd (EQUIP rules); "trinket" is honest
+## cargo — worth its `value` and nothing more.
+## Consumable effects are PROVISIONAL — no canonical potion rule
+## existed; the numbers mirror the scale of Heal I (up to 4 per
+## pool) pending design. effect.type: "restore_lp" | "restore_ap" —
+## pools cap independently at their max; "target" picks the valid
+## set the same way support spells do ("ally_alive").
+## Equipment fields (all optional — an entry may carry any subset):
+##   slot      "weapon" | "shield" | "armor" | "accessory"
+##   usable_by hero ids/classes allowed to wear it; ABSENT = any hero
+##   value     honest gold worth (MARKET sells at sell_ratio of it)
+##   quality   "common" | "fine" | "masterwork" — dressing today
+##   weapon    dice string the wearer's weapon becomes (a WEAPONS
+##             table key also works — it keeps its damage type)
+##   attack / defense / shield   integer modifiers added to the
+##             actor's fields while worn
+##   armor     {lp = n, types = {...}} merged into actor.armor
+## Every modifier is BAKED IN at equip time and reverses exactly at
+## unequip — nothing re-derives on load.
 ## icon: {color, mark} renders a placeholder chip now; `icon_tex`
 ## is the hook for real art later — a set path wins over the chip.
 const ITEMS := {
 	"Small Potion": {
 		kind = "consumable", target = "ally_alive",
 		effect = {type = "restore_lp", amount = 4},   # PROVISIONAL
+		value = 6,                          # PROVISIONAL market worth
 		desc = "A draught of red glass. Knits flesh — restores "
 			+ "up to 4 LP.",
 		icon = {color = Color(0.72, 0.25, 0.28), mark = "P"},
@@ -808,28 +827,114 @@ const ITEMS := {
 	"Potion of Vigor": {
 		kind = "consumable", target = "ally_alive",
 		effect = {type = "restore_ap", amount = 4},   # PROVISIONAL
+		value = 6,                          # PROVISIONAL market worth
 		desc = "Bitter green tonic. Steadies the limbs — restores "
 			+ "up to 4 AP.",
 		icon = {color = Color(0.3, 0.55, 0.35), mark = "V"},
 	},
+	# ---- equipment (PROVISIONAL set + values — a small grounded
+	# medieval kit so the rules are real; no balance claimed) ----
 	"Rusty Sword": {
-		kind = "equipment",
-		desc = "Notched blade, pitted edge. There is no equipment "
-			+ "system yet — it is cargo.",
+		kind = "equipment", slot = "weapon",
+		weapon = "1d5",        # pitted edge — under a soldier's 1d6
+		quality = "common", value = 8,
+		desc = "Notched blade, pitted edge. Better than fists, "
+			+ "barely.",
 		icon = {color = Color(0.55, 0.5, 0.42), mark = "S"},
 	},
+	"Soldier's Sword": {
+		kind = "equipment", slot = "weapon",
+		weapon = "1d6", attack = 1,
+		usable_by = ["warrior"],
+		quality = "fine", value = 30,
+		desc = "A keep-forged blade, true edge and a balanced grip. "
+			+ "A soldier's weapon, made for a soldier's hand.",
+		icon = {color = Color(0.6, 0.62, 0.7), mark = "S"},
+	},
+	"Woodsman's Axe": {
+		kind = "equipment", slot = "weapon",
+		weapon = "1d8",
+		usable_by = ["barbarian"],
+		quality = "common", value = 24,
+		desc = "Broad-headed timber axe. It does not care what it "
+			+ "is swung at.",
+		icon = {color = Color(0.45, 0.35, 0.25), mark = "A"},
+	},
+	"Hunting Bow": {
+		kind = "equipment", slot = "weapon",
+		# the WEAPONS key, not bare dice — it keeps the pierce
+		# type and the shot's arrow packet
+		weapon = "bow",
+		usable_by = ["archer"],
+		quality = "common", value = 28,
+		desc = "Yew and linen string, made for deer. It will serve.",
+		icon = {color = Color(0.5, 0.4, 0.25), mark = "B"},
+	},
+	"Wooden Shield": {
+		kind = "equipment", slot = "shield",
+		shield = 2,
+		usable_by = ["warrior", "barbarian"],
+		quality = "common", value = 15,
+		desc = "Oak planks and an iron boss. Splinters, but it "
+			+ "splinters between you and the blow.",
+		icon = {color = Color(0.5, 0.42, 0.3), mark = "W"},
+	},
+	"Leather Jerkin": {
+		kind = "equipment", slot = "armor",
+		armor = {lp = 1},
+		usable_by = ["warrior", "barbarian", "archer"],
+		quality = "common", value = 20,
+		desc = "Boiled hide over wool. Turns a grazing cut, no "
+			+ "more.",
+		icon = {color = Color(0.55, 0.38, 0.25), mark = "J"},
+	},
+	"Warded Robe": {
+		kind = "equipment", slot = "armor",
+		armor = {lp = 1, types = {fire = 1, cold = 1}},
+		usable_by = ["wizard", "healer"],
+		quality = "fine", value = 45,
+		desc = "Sigil-stitched cloth, warm against fire and cold "
+			+ "alike. A scholar's armor.",
+		icon = {color = Color(0.45, 0.5, 0.72), mark = "R"},
+	},
+	"Sentinel Ring": {
+		kind = "equipment", slot = "accessory",
+		defense = 1,
+		quality = "fine", value = 30,
+		desc = "A plain iron band. The hand that wears it finds "
+			+ "its guard a half-beat sooner.",
+		icon = {color = Color(0.7, 0.68, 0.5), mark = "O"},
+	},
+	"Bear Talisman": {
+		kind = "equipment", slot = "accessory",
+		attack = 1,
+		quality = "common", value = 18,
+		desc = "A carved claw on a thong. The wearer hits like he "
+			+ "means it.",
+		icon = {color = Color(0.6, 0.45, 0.3), mark = "T"},
+	},
+	# ---- trinkets: honest cargo — worth their `value`, no rules ----
 	"Bone Charm": {
-		kind = "trinket",
+		kind = "trinket", value = 4,
 		desc = "A knucklebone on a cord. Worth something to someone, "
 			+ "somewhere.",
 		icon = {color = Color(0.78, 0.75, 0.66), mark = "B"},
 	},
 	"Old Coin": {
-		kind = "trinket",
+		kind = "trinket", value = 12,
 		desc = "Tarnished, pre-war mint. A collector's coin, not "
 			+ "currency here.",
 		icon = {color = Color(0.72, 0.6, 0.3), mark = "C"},
 	},
+}
+
+## MARKET (provisional economy — no canonical price model exists):
+## an item's `value` is its honest gold worth; selling to the
+## peddler pays floor(value * sell_ratio) — the margin is the
+## missing half. What the market SELLS lives on the scenario config
+## as MARKET_STOCK (sim/market.gd reads it; absent -> no stock).
+const MARKET := {
+	sell_ratio = 0.5,    # PROVISIONAL — half worth on the way out
 }
 
 ## BELT / QUICK ITEMS (Inventory 0.1): each hero carries a small

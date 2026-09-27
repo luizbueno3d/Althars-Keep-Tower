@@ -66,6 +66,9 @@ var progress              # sim/progress.gd — XP, Level, attributes,
 var focus_id := ""        # explicit player target order: heroes chase
                           # this enemy instead of the zone default;
                           # cleared when the target dies/disengages
+var focus_stall := 0      # consecutive failed steps toward the focus
+                          # mark — at COMMAND.focus_stall_limit the
+                          # order is dropped as unreachable (0.5)
 var objective_id := ""    # assault objective for ai="march": the id of a
                           # STRUCTURE this actor advances on (the Keep).
                           # Empty -> the actor uses its ordinary
@@ -210,7 +213,8 @@ func to_dict() -> Dictionary:
 		resist = resist.duplicate(), armor = armor.duplicate(true),
 		ai = ai, leash = leash, act_cd = act_cd, move_cd = move_cd,
 		cd = cd,
-		focus_id = focus_id, heal_cd = heal_cd, resur_cd = resur_cd,
+		focus_id = focus_id, focus_stall = focus_stall,
+		heal_cd = heal_cd, resur_cd = resur_cd,
 		objective_id = objective_id,
 		spells = spells.duplicate(), belt = belt.duplicate(),
 		progress = progress.to_dict() if progress != null else {},
@@ -256,6 +260,7 @@ func apply_dict(d: Dictionary) -> void:
 	move_cd = d.get("move_cd", move_cd)
 	cd = d.get("cd", cd)
 	focus_id = d.get("focus_id", focus_id)
+	focus_stall = d.get("focus_stall", focus_stall)
 	objective_id = d.get("objective_id", objective_id)
 	heal_cd = d.get("heal_cd", heal_cd)
 	resur_cd = d.get("resur_cd", resur_cd)

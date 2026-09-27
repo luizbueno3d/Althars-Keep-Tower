@@ -16,5 +16,10 @@ echo "== tower scenario probe =="
 tools/probe.sh
 
 echo
+echo "== tower suite =="
+tools/Godot.app/Contents/MacOS/Godot --headless --path . \
+	-s res://tests/run_tests.gd
+
+echo
 echo "== shared rules engine suite (Althar's Keep) =="
 ../benchmarks/godot/tools/test.sh 2>&1 | tail -3

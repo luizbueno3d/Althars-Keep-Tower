@@ -194,6 +194,14 @@ const FEEDBACK := {
 	critical_lp_frac = 0.25,
 }
 
+## Player command tuning (Playable Party 0.5): a focus order the
+## hero can never reach is dropped after `focus_stall_limit` failed
+## steps instead of stalling him forever — he returns to autonomy
+## with a "command_dropped" event. PROVISIONAL count.
+const COMMAND := {
+	focus_stall_limit = 6,
+}
+
 ## Encounter XP (README §22): a fixed pool shared equally among
 ## allied heroes who entered the battlefield during the encounter.
 ## PROVISIONAL value — sized so clearing the six-skeleton group is a
@@ -257,6 +265,7 @@ const CRITICALS := {
 ## to the destination: "defend HERE".
 const TELEPORT := {
 	display_name = "Teleport I",
+	targeting = "hero_destination",   # a hero plus a destination hex
 	kind = "blink",
 	range = 8,           # hexes from the caster to the destination
 	ap_cost = 3,         # Althar's AP per relocation
@@ -398,6 +407,10 @@ const PROGRESSION := {
 
 const FIREBALL := {
 	display_name = "Fireball I",
+	# CANONICAL (0.5): `targeting` is the spell's declared targeting
+	# mode (sim/targeting.gd) — ground-targeted spells hit whatever
+	# stands inside the blast, allies included.
+	targeting = "ground",
 	mp_cost = 3,          # PROVISIONAL — spell MP costs are unmeasured
 	dmg_type = "fire",     # identity: burning + explosive magic
 	damage = "2d6",        # shown to the player at cast time
@@ -424,6 +437,7 @@ const FIREBALL := {
 ## lobbed blast (root README "Initial Spell Set": fast/immediate strike).
 const LIGHTNING := {
 	display_name = "Lightning I",
+	targeting = "enemy",    # CANONICAL: bolt binds one enemy combatant
 	mp_cost = 2,          # PROVISIONAL
 	kind = "bolt",          # presentation: instant arc, not a comet
 	dmg_type = "electrical",
@@ -447,6 +461,7 @@ const LIGHTNING := {
 ## cold exposure accumulates toward a future Frozen state.
 const BLIZZARD := {
 	display_name = "Blizzard I",
+	targeting = "ground",   # CANONICAL: the storm is conjured on a hex
 	mp_cost = 4,          # PROVISIONAL
 	kind = "storm",          # deploys a persistent zone, no projectile
 	instant = true,          # conjured at the target, never travels
@@ -473,6 +488,7 @@ const BLIZZARD := {
 ## multi-component packet (sim/damage.gd).
 const METEOR := {
 	display_name = "Meteor I",
+	targeting = "ground",   # CANONICAL: the rock falls on a hex
 	mp_cost = 6,          # PROVISIONAL
 	kind = "comet",
 	blast_scale = 2.2,       # presentation: explosion size multiplier
@@ -507,7 +523,7 @@ const METEOR := {
 ## PROVISIONAL are balance-TBD, not canon.
 const HEAL := {
 	display_name = "Heal I",
-	kind = "blessing", target = "ally_alive",
+	kind = "blessing", target = "ally_alive", targeting = "ally_alive",
 	range = 10,           # CANON (0.5): RANGED working — the Healer
 	                      # mends across the field like Althar's own
 	                      # ranged magic, no bedside walk required
@@ -521,7 +537,7 @@ const HEAL := {
 
 const RESURRECTION := {
 	display_name = "Resurrection I",
-	kind = "blessing", target = "ally_dead",
+	kind = "blessing", target = "ally_dead", targeting = "ally_dead",
 	range = 1,            # CANON (0.5): PROXIMITY working — the
 	                      # Healer must stand beside the fallen;
 	                      # a far corpse answers "out_of_range" and
@@ -535,7 +551,7 @@ const RESURRECTION := {
 
 const HASTE := {
 	display_name = "Haste I",
-	kind = "blessing", target = "ally_alive",
+	kind = "blessing", target = "ally_alive", targeting = "ally_alive",
 	range = 6,
 	mp_cost = 3,          # PROVISIONAL
 	ap_cost = 0,
@@ -547,7 +563,7 @@ const HASTE := {
 
 const AEGIS := {
 	display_name = "Aegis I",
-	kind = "blessing", target = "ally_alive",
+	kind = "blessing", target = "ally_alive", targeting = "ally_alive",
 	range = 6,
 	mp_cost = 4,          # PROVISIONAL
 	ap_cost = 0,

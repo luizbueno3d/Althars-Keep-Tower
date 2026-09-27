@@ -131,6 +131,14 @@ static func _act(battle, a) -> void:
 		# down and ground enemies cannot strike up
 		reach = null
 	if reach != null:
+		# a focused hero whose mark is inside strike reach has
+		# ARRIVED — the stall clock resets (the strike itself may
+		# still land on an adjacent interposer)
+		if a.focus_id != "" and a.focus_stall > 0:
+			var mk = battle.actors.get(a.focus_id)
+			if mk != null and mk.alive \
+					and Hex.distance(a.hex, mk.hex) <= a.attack_range:
+				a.focus_stall = 0
 		_strike(battle, a, reach)
 		a.cd = a.act_cd * a.cadence_mult()
 		return
@@ -143,6 +151,7 @@ static func _act(battle, a) -> void:
 		_assault(battle, a)
 		return
 	var goal = null
+	var chasing_focus := false
 	if a.ai == "advance":
 		# enemies march on the keep — nearest living defender
 		goal = _nearest_within(a, targets, 99)
@@ -152,6 +161,7 @@ static func _act(battle, a) -> void:
 		var fo = _focus(battle, a)
 		if fo != null:
 			goal = fo
+			chasing_focus = true
 		elif a.ai == "mend":
 			# Healer triage — heal/close on the most-wounded ally;
 			# falls through to anchor discipline when nobody needs him
@@ -172,8 +182,20 @@ static func _act(battle, a) -> void:
 		return
 	if _step(battle, a, goal.hex):
 		a.cd = a.move_cd * a.cadence_mult()
+		if chasing_focus:
+			a.focus_stall = 0      # progress — the order stands
 	else:
 		a.cd = a.move_cd * 0.5 * a.cadence_mult()
+		if chasing_focus:
+			# no walkable step toward the mark: count consecutive
+			# failures and drop an order the hero can never reach
+			a.focus_stall += 1
+			if a.focus_stall >= Cfg.COMMAND.focus_stall_limit:
+				var mark: String = a.focus_id
+				a.focus_id = ""
+				a.focus_stall = 0
+				battle.emit({type = "command_dropped", actor = a.id,
+					target = mark, reason = "unreachable"})
 
 ## Explicit player order (Playable Party 0.5): the hero chases this
 ## enemy anywhere — leash no longer binds him. The order clears

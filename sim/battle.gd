@@ -168,6 +168,7 @@ func command_move(id: String, h: Vector2i) -> bool:
 		return false
 	a.anchor = h
 	a.focus_id = ""
+	a.focus_stall = 0
 	emit({type = "command", actor = a.id, kind = "move", to = h})
 	return true
 
@@ -181,6 +182,7 @@ func command_focus(id: String, target_id: String) -> bool:
 	if t == null or not t.alive or t.faction == a.faction:
 		return false
 	a.focus_id = target_id
+	a.focus_stall = 0
 	emit({type = "command", actor = a.id, kind = "focus",
 		target = target_id})
 	return true

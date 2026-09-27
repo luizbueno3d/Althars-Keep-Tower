@@ -1,8 +1,15 @@
 extends RefCounted
 ## Fireball simulation: a real temporal event, not an instant resolver.
 ##
-## cast()      -> rolls the displayed damage dice, launches a projectile that
-##                advances through world space over ~1-2 s.
+## cast_at()   -> GROUND-targeted entry point: aims at a battlefield
+##                POSITION — any in-grid hex is legal (empty ground,
+##                an ally's hex, an enemy's hex; friendly fire is
+##                intentional).
+## cast()      -> actor-targeted entry point: ENEMY-mode spells require
+##                a living enemy; GROUND-mode spells accept any living
+##                actor and aim at its current hex.
+## Both launch the same projectile that advances through world space
+## over ~1-2 s.
 ## update(dt)  -> moves the projectile; when impact is imminent, each living
 ##                enemy inside the danger region rolls Perception; those who
 ##                pass (and have AP) roll Dodge and may move to a safer hex
@@ -18,6 +25,7 @@ const Dodge = preload("res://sim/dodge.gd")
 const Loot = preload("res://sim/loot.gd")
 const Damage = preload("res://sim/damage.gd")
 const Progress = preload("res://sim/progress.gd")
+const Targeting = preload("res://sim/targeting.gd")
 
 ## Blast ring for a hex vs the target (0 = center). >aoe_radius = safe.
 static func ring_of(spell: Dictionary, target: Vector2i, h: Vector2i) -> Variant:
@@ -29,12 +37,30 @@ static func ring_of(spell: Dictionary, target: Vector2i, h: Vector2i) -> Variant
 static func _in_danger(battle, actor, target: Vector2i, spell: Dictionary) -> bool:
 	return actor.alive and ring_of(spell, target, actor.hex) != null
 
-## Cast: validates the target is a living ENEMY actor — a spell is cast
-## upon a combatant, never bare ground — then range/grid, rolls the
-## shown damage dice, starts flight toward the target's hex. Returns
-## true on success, false + reason on rejection. spell_id selects the
-## config block (FIREBALL / LIGHTNING / BLIZZARD / METEOR);
-## battle.fireball is the single in-flight projectile slot.
+## Ground-targeted cast: aims spell_id at battlefield POSITION
+## `target_hex` — any in-grid hex is legal. Returns true on success,
+## false + reason on rejection. battle.fireball is the single
+## in-flight projectile slot.
+static func cast_at(battle, caster_id: String, target_hex: Vector2i,
+		spell_id := "fireball") -> Array:
+	var cfg: Dictionary = battle.config.SPELLS[spell_id]
+	var caster = battle.actors[caster_id]
+	assert(caster != null and caster.alive, "cast_at: bad caster")
+	if battle.fireball != null:
+		return [false, "busy"]
+	if not Targeting.is_ground(cfg):
+		return [false, "wrong_targeting"]
+	if not battle.hex_in_grid(target_hex):
+		return [false, "off_grid"]
+	if Hex.distance(caster.hex, target_hex) > cfg.range:
+		return [false, "out_of_range"]
+	return _launch(battle, caster, target_hex, spell_id, cfg)
+
+## Actor-targeted cast: resolves `target_id` by the spell's declared
+## targeting mode — ENEMY spells still require a living enemy;
+## GROUND spells accept any living actor and aim at its current hex
+## (a fireball may now be aimed at the Warrior's hex). Returns
+## true on success, false + reason on rejection.
 static func cast(battle, caster_id: String, target_id: String,
 		spell_id := "fireball") -> Array:
 	var cfg: Dictionary = battle.config.SPELLS[spell_id]
@@ -43,15 +69,26 @@ static func cast(battle, caster_id: String, target_id: String,
 	if battle.fireball != null:
 		return [false, "busy"]
 	var target = battle.actors.get(target_id)
-	if target == null or not target.alive \
-			or target.faction != "enemy":
+	if target == null or not target.alive:
 		return [false, "bad_target"]
+	var mode := Targeting.mode_of(cfg)
+	if mode == Targeting.ENEMY and target.faction != "enemy":
+		return [false, "bad_target"]
+	if mode != Targeting.ENEMY and mode != Targeting.GROUND:
+		return [false, "wrong_targeting"]
 	var target_hex: Vector2i = target.hex
 	if not battle.hex_in_grid(target_hex):
 		return [false, "off_grid"]
 	if Hex.distance(caster.hex, target_hex) > cfg.range:
 		return [false, "out_of_range"]
+	return _launch(battle, caster, target_hex, spell_id, cfg)
 
+## Shared tail of both entry points: a legitimate attempt — target
+## resolved, on grid, in range — commits the MP, rolls the
+## Spellcasting check and the shown damage dice, and starts flight
+## toward `target_hex`.
+static func _launch(battle, caster, target_hex: Vector2i,
+		spell_id: String, cfg: Dictionary) -> Array:
 	# MP — the spellcasting resource, separate from AP (physical
 	# endurance). Every spell declares `mp_cost`; the pool must cover
 	# it before the weave is even attempted. Non-spellcasters have
@@ -96,7 +133,7 @@ static func cast(battle, caster_id: String, target_id: String,
 	var instant: bool = cfg.get("instant", false)
 	battle.fireball = {
 		spell = cfg,
-		caster_id = caster_id,
+		caster_id = caster.id,
 		target = target_hex,
 		from = fx,
 		to = tx,
@@ -110,7 +147,8 @@ static func cast(battle, caster_id: String, target_id: String,
 		perceived = {},     # actor id -> true once Perception resolved
 		arrived = false,
 	}
-	battle.emit({ type = "cast", caster = caster, target = target_hex, spell = cfg,
+	battle.emit({ type = "cast", caster = caster, target = target_hex,
+		spell = cfg, targeting = Targeting.mode_of(cfg),
 		mp_cost = mp_cost, mp = caster.mp })
 	battle.emit({ type = "roll", label = cfg.display_name, roll = roll })
 	return [true]
